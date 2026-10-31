@@ -44,6 +44,7 @@ import {
   KeyboardIcon,
   DicesIcon,
   LoaderCircleIcon,
+  Undo2Icon,
 } from "lucide-react";
 import { useNativeTitlebarHeight } from "../../lib/windowControlsOverlay";
 import { isElectron } from "../../env";
@@ -53,6 +54,7 @@ import { useEnvironmentThread, threadEnvironment } from "../../state/threads";
 import { useEnvironmentScope } from "../../state/session";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useThreadActions } from "../../hooks/useThreadActions";
+import { useThreadUndoNotice } from "../../hooks/showThreadUndoNotice";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { deriveCanInterruptRunningThread } from "../../session-logic";
@@ -196,7 +198,7 @@ function ActorActions({
   };
   return (
     <div
-      className="pointer-events-auto mt-2 flex max-w-[min(32rem,90vw)] flex-col gap-2 rounded-2xl bg-popover p-2 text-popover-foreground shadow-lg"
+      className="pointer-events-auto mt-2 flex max-w-full flex-col gap-2 rounded-2xl bg-popover p-2 text-popover-foreground shadow-lg"
       role="group"
       aria-label={`${actor.title} actions`}
     >
@@ -541,7 +543,10 @@ function OfficeFloor({
                     };
                   }
                 }}
-                className="pointer-events-auto absolute left-0 top-0 flex max-w-72 flex-col items-center gap-1"
+                className={cn(
+                  "pointer-events-auto absolute left-0 top-0 flex max-w-[min(18rem,calc(100%-1rem))] flex-col items-center gap-1",
+                  entry.key === selected && "z-10",
+                )}
                 hidden
               >
                 <Button
@@ -863,6 +868,7 @@ export function OfficePage() {
     primary = usePrimaryEnvironmentId(),
     close = useCloseAppModal(),
     chat = use(OfficeChatContext);
+  const undoNotice = useThreadUndoNotice((state) => state.notice);
   const shells = useQuietThreadShells();
   const [chosen, setChosen] = useState<EnvironmentId | null>(null),
     [prefs, setPrefs] = useState(readOfficePreferences),
@@ -932,6 +938,16 @@ export function OfficePage() {
           Back to T3
         </Button>
         <span className="hidden text-sm font-medium sm:inline">Signal Crew</span>
+        {undoNotice ? (
+          <Button size="sm" variant="outline" onClick={() => void undoNotice.undo()}>
+            <Undo2Icon />
+            Undo
+            <span className="sr-only">
+              {undoNotice.action.toLowerCase()} {undoNotice.count} thread
+              {undoNotice.count === 1 ? "" : "s"}
+            </span>
+          </Button>
+        ) : null}
         <div className="ml-auto max-w-80 min-w-0">
           <Select
             value={selected?.environmentId ?? null}

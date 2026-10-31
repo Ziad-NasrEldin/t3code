@@ -169,7 +169,17 @@ export function advanceActorFrame(
       .project(state.camera);
     const shown = Math.abs(p.x) < 1.15 && Math.abs(p.y) < 1.15 && Math.abs(p.z) < 1;
     label.hidden = !shown;
-    label.style.transform = `translate(${((p.x + 1) * state.size.width) / 2}px,${((1 - p.y) * state.size.height) / 2}px) translate(-50%,-100%)`;
+    const halfWidth = label.offsetWidth / 2,
+      height = label.offsetHeight,
+      x = Math.max(
+        halfWidth + 8,
+        Math.min(state.size.width - halfWidth - 8, ((p.x + 1) * state.size.width) / 2),
+      ),
+      y = Math.max(
+        height + 8,
+        Math.min(state.size.height - 8, ((1 - p.y) * state.size.height) / 2),
+      );
+    label.style.transform = `translate(${x}px,${y}px) translate(-50%,-100%)`;
   }
 }
 export function connectOfficeControls(controls: OrbitControls, invalidate: () => void) {
