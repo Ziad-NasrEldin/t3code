@@ -509,6 +509,18 @@ it("drains conflicting traffic in ticket order without letting a new convoy star
   }
   expect(revised.reserved("scanning")).toBe(false);
 
+  const churn = new CorridorTraffic();
+  churn.plan("waiting", new Vector3(0, 0.07, 0), route);
+  let booked = false;
+  for (let frame = 0; frame < 4; frame++) {
+    churn.beginFrame();
+    booked ||= churn.claim("waiting", () => false);
+    churn.plan("unrelated", new Vector3(5000, 0.07, 5000), [new Vector3(5001, 0.07, 5000)]);
+    churn.arrive("unrelated");
+    churn.remove("unrelated");
+  }
+  expect(booked).toBe(true);
+
   const continuous = new CorridorTraffic();
   const v = (x: number, z: number) => new Vector3(x, 0.07, z);
   continuous.plan("leader", v(-20, 0), [v(200, 0)]);

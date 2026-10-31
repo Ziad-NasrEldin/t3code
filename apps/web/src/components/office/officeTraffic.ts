@@ -196,6 +196,16 @@ export class CorridorTraffic {
     scan: Generator<void, ScannedRoute[]>;
   } | null = null;
   private readonly attempts = new Set<string>();
+  private changed(box: Obstacle) {
+    const plan = this.preparing && this.plans.get(this.preparing.key);
+    if (
+      plan &&
+      (plan.candidates.some((segments) => segments.some((segment) => overlaps(segment.box, box))) ||
+        (plan.shape && (overlaps(plan.shape.source, box) || overlaps(plan.shape.target, box))) ||
+        (plan.zone && overlaps(plan.zone, box)))
+    )
+      this.revision++;
+  }
   beginFrame(delta = 0.1) {
     this.now += this.delta;
     this.delta = delta;
@@ -282,7 +292,7 @@ export class CorridorTraffic {
     if (plan.departure !== null) return plan.departure <= this.now;
     if (!this.attempts.delete(key) && this.preparing?.key !== key) return false;
     if (this.preparing && this.preparing.key !== key) return false;
-    // A multi-frame scan cannot commit against bookings added or retired while it yielded.
+    // Restart when indexed occupancy affecting this scan changed while it yielded.
     if (this.preparing && this.preparing.revision !== this.revision) this.preparing = null;
     this.preparing ??= { key, revision: this.revision, scan: this.scan(key, plan, occupied) };
     let result: IteratorResult<void, ScannedRoute[]> | undefined;
@@ -361,7 +371,7 @@ export class CorridorTraffic {
       plan.reservations.push(stationary(key, center, this.now, Infinity, box));
     }
     for (const reservation of plan.reservations) this.index.set(reservation, reservation.box);
-    this.revision++;
+    for (const reservation of plan.reservations) this.changed(reservation.box);
     install?.(plan.segments.map((segment) => segment.end.clone()));
     return departure <= this.now;
   }
@@ -421,7 +431,7 @@ export class CorridorTraffic {
     const end = last ? stationary(key, last.end, this.now, Infinity, plan!.shape?.target) : null;
     this.remove(key);
     if (end) {
-      this.revision++;
+      this.changed(end.box);
       this.parked.set(key, end);
       this.index.set(end, end.box);
     }
@@ -435,10 +445,16 @@ export class CorridorTraffic {
   remove(key: string, _keepTicket = false) {
     if (this.preparing?.key === key) this.preparing = null;
     const plan = this.plans.get(key);
-    if (plan) for (const segment of plan.reservations) this.index.delete(segment);
+    if (plan)
+      for (const segment of plan.reservations) {
+        this.changed(segment.box);
+        this.index.delete(segment);
+      }
     const parked = this.parked.get(key);
-    if (parked || plan?.reservations.length) this.revision++;
-    if (parked) this.index.delete(parked);
+    if (parked) {
+      this.changed(parked.box);
+      this.index.delete(parked);
+    }
     this.parked.delete(key);
     this.plans.delete(key);
   }
