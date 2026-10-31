@@ -721,7 +721,7 @@ export class OfficeMotion {
         const path = findPath(
           localPosition,
           p.start,
-          obstacles[life.variant],
+          this.roomObstacles(life),
           [-6, -5.5, 6, 5.5],
           life.actor.child ? bodyBounds.child.walk : bodyBounds.main.walk,
         );
@@ -902,7 +902,7 @@ export class OfficeMotion {
               ? findPath(
                   homeLocal(life.variant, this.slots.get(life.key) ?? 0),
                   p.start,
-                  obstacles[life.variant] as ReadonlyArray<{ min: Point; max: Point }>,
+                  this.roomObstacles(life),
                   [-6, -5.5, 6, 5.5],
                   life.actor.child ? bodyBounds.child.walk : bodyBounds.main.walk,
                 )

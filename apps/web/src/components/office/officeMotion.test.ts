@@ -271,7 +271,15 @@ it("completes the approved child sofa and game performances, retaining later com
 it("walks to a workshop keyboard and releases it after interruption", () => {
   const motion = new OfficeMotion(),
     worker = { ...actor, status: "working" as const },
-    life = motion.add(worker, siteAt(1), "grove", 0, { site: null, slot: 0 });
+    life = motion.add(worker, siteAt(0), "grove", 0, { site: null, slot: 0 });
+  const child = motion.add(
+    { ...actor, key: "keyboard-child", child: true, status: "ready" },
+    siteAt(0),
+    "grove",
+    1,
+    { site: null, slot: 0 },
+  );
+  const childHome = child.position.clone();
   expect(motion.request(worker.key, "keyboard")).toBeNull();
   for (let step = 0; step < 10000 && life.performance === null; step++) motion.tick(0.1, false);
   expect(life.performance).toBe("keyboard");
@@ -281,6 +289,14 @@ it("walks to a workshop keyboard and releases it after interruption", () => {
   expect(life.position.distanceTo(life.home)).toBeLessThan(0.05);
   expect(motion.reservations.size).toBe(0);
   expect(life.actor.status).toBe("waiting");
+  motion.update(worker);
+  expect(motion.request(worker.key, "keyboard")).toBeNull();
+  for (let step = 0; step < 10000 && life.performance === null; step++) {
+    motion.tick(0.1, false);
+    expect(boxesOverlap(lifeBodyBox(life), lifeBodyBox(child))).toBe(false);
+  }
+  expect(life.performance).toBe("keyboard");
+  expect(child.position.equals(childHome)).toBe(true);
 });
 
 it("reconciles settlement and undo during a reserved performance without retaining a cup or deleting new work", () => {
