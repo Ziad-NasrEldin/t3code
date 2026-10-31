@@ -6,6 +6,7 @@ import {
   siteAt,
   routeToLobby,
   routeBetweenSites,
+  ringLinks,
 } from "./officeLayout";
 describe("stable concentric offices", () => {
   it("keeps occupied sites, reuses vacancies and extends through further rings", () => {
@@ -20,7 +21,9 @@ describe("stable concentric offices", () => {
     expect(siteAt(149).ring).toBeGreaterThan(2);
   });
   it("reserves complete inner room footprints and corner links before growing", () => {
+    expect(ringSize(0)[1] - 1.4056196632323068).toBeGreaterThan(6.650000095367432);
     for (let ring = 1; ring < 5; ring++) {
+      expect(ringLinks(ring)).toHaveLength(8);
       const inner = ringSize(ring - 1),
         outer = ringSize(ring);
       expect(outer[0] - 1.5).toBeGreaterThan(inner[0] + 14);
@@ -36,6 +39,7 @@ describe("stable concentric offices", () => {
     // The reverse local journey on a clear north side used to circle the ring.
     expect(routeBetweenSites(siteAt(6), siteAt(4))).toEqual([
       [0, -26.5],
+      [-9.5, -26.5],
       [-14, -26.5],
     ]);
     for (const id of [0, 1, 2, 3, 4, 15, 80]) {

@@ -5,6 +5,7 @@ import {
   projectVariant,
   restAreaKey,
   siteAt,
+  routeBetweenSites,
 } from "./officeLayout";
 import type { SceneRoom, VisualActor } from "./OfficeScene";
 
@@ -105,6 +106,30 @@ export function reconcileWorld(
   }
   const ids = [...new Set([...world.rooms.map((room) => room.id), ...wanted.keys()])];
   const sites = allocateStable(world.sites, ids);
+  const available = new Set(Object.values(rests));
+  for (const { actor } of entries)
+    if (!actor.child && world.rests[actor.key] !== undefined) available.delete(rests[actor.key]!);
+  for (const { actor } of entries) {
+    if (actor.child || world.rests[actor.key] !== undefined) continue;
+    const home = siteAt(sites[projectRoomKey(actor.projectId, slots[actor.key]!)]!);
+    let nearest = rests[actor.key]!,
+      best = Infinity;
+    for (const candidate of available) {
+      const id = restAreaKey(candidate);
+      const route = routeBetweenSites(home, id ? siteAt(sites[id]!) : null);
+      const length = route.reduce(
+        (sum, p, i) =>
+          sum + (i ? Math.abs(p[0] - route[i - 1]![0]) + Math.abs(p[1] - route[i - 1]![1]) : 0),
+        0,
+      );
+      if (length < best) {
+        best = length;
+        nearest = candidate;
+      }
+    }
+    rests[actor.key] = nearest;
+    available.delete(nearest);
+  }
   const rooms = ids.map((id): SceneRoom => {
     const prior = world.rooms.find((room) => room.id === id);
     const target = wanted.get(id);

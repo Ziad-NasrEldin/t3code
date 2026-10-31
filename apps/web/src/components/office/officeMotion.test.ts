@@ -81,6 +81,7 @@ function tickCrowd(
   seconds: number,
   onTick?: (step: number) => void,
 ) {
+  const firstMoves = lives.map(() => Infinity);
   let peakMoving = 0;
   let overlap = "";
   let fastestStep = 0;
@@ -108,7 +109,7 @@ function tickCrowd(
       const atContact =
         contactPoint &&
         Math.hypot(life.position.x - contactPoint[0], life.position.z - contactPoint[1]) < 0.15;
-      if (!life.performance && !atContact && (steps === 0 || distance > 0.001)) {
+      if (!life.performance && !atContact) {
         for (const room of rooms) {
           if (
             Math.abs(life.position.x - room.site.x) > 9 ||
@@ -137,7 +138,10 @@ function tickCrowd(
         )
           furniture ||= `${life.key}:lobby`;
       }
-      if (distance > 0.001) moving++;
+      if (distance > 0.001) {
+        moving++;
+        firstMoves[i] = Math.min(firstMoves[i]!, steps / 10);
+      }
       fastestStep = Math.max(fastestStep, distance);
       for (let j = i + 1; j < lives.length; j++)
         if (boxesOverlap(boxes[i]!, boxes[j]!)) overlap ||= `${lives[i]!.key}:${lives[j]!.key}`;
@@ -150,6 +154,7 @@ function tickCrowd(
   }
   return {
     peakMoving,
+    latestFirstMove: Math.max(...firstMoves.filter(Number.isFinite)),
     overlap,
     furniture,
     fastestStep,
@@ -179,6 +184,8 @@ it("brings 60 simultaneous normal-speed occupants out and home with fair concurr
     }),
   );
   const outward = tickCrowd(motion, lives, 2400);
+  expect(outward.seconds).toBeLessThan(900);
+  expect(outward.latestFirstMove).toBeLessThan(448.7);
   expect(outward.overlap).toBe("");
   expect(outward.furniture).toBe("");
   expect(outward.longestStall).toBeLessThan(20);
@@ -190,6 +197,8 @@ it("brings 60 simultaneous normal-speed occupants out and home with fair concurr
   ).toBe(true);
   for (const life of lives) motion.update({ ...life.actor, status: "working" });
   const inward = tickCrowd(motion, lives, 2400);
+  expect(inward.seconds).toBeLessThan(1000);
+  expect(inward.latestFirstMove).toBeLessThan(1146.7);
   expect(inward.overlap).toBe("");
   expect(inward.furniture).toBe("");
   expect(inward.longestStall).toBeLessThan(20);
@@ -345,7 +354,7 @@ it("reserves actual rig bounds for the 12-project 60-occupant single-floor fixtu
   const result = tickCrowd(motion, lives, 1800, (step) => {
     if (child.performance === "sofa") sofaAt = Math.min(sofaAt, step / 10);
   });
-  expect(result.seconds).toBeLessThan(900);
+  expect(result.seconds).toBeLessThan(260);
   expect(result.performed).toContain(`${child.key}:sofa`);
   expect(sofaAt).toBeLessThan(180);
   expect(result.overlap).toBe("");
@@ -386,7 +395,7 @@ it("reserves actual rig bounds for the 12-project 60-occupant single-floor fixtu
       recovery = true;
     }
   });
-  expect(returning.seconds).toBeLessThan(1400);
+  expect(returning.seconds).toBeLessThan(260);
   expect(recovery).toBe(true);
   expect(returning.performed).toContain(`${child.key}:game`);
   expect(returning.overlap).toBe("");
@@ -437,7 +446,43 @@ it("drains conflicting traffic in ticket order without letting a new convoy star
   expect(traffic.claim("late-outbound", () => false)).toBe(true);
   traffic.clear();
   expect(traffic.active("late-outbound")).toBe(false);
+  const crossing = new CorridorTraffic();
+  crossing.plan("long", new Vector3(-20, 0.07, 0), [new Vector3(200, 0.07, 0)]);
+  crossing.beginFrame();
+  expect(crossing.claim("long", () => false)).toBe(true);
+  crossing.plan("cross", new Vector3(0, 0.07, -20), [new Vector3(0, 0.07, 20)]);
+  let crossed = false;
+  for (let frame = 0; frame < 400; frame++) {
+    crossing.beginFrame(0.1);
+    crossed ||= crossing.claim("cross", () => false);
+  }
+  expect(crossed).toBe(true);
+  expect(crossing.active("long")).toBe(true);
+  // A stopped holder prevents admission until it physically releases its occupied space.
+  crossing.plan("held", new Vector3(50, 0.07, -20), [new Vector3(50, 0.07, 20)]);
+  crossing.beginFrame();
+  expect(crossing.claim("held", () => true)).toBe(false);
+  crossing.beginFrame();
+  expect(crossing.claim("held", () => false)).toBe(true);
 });
+it("replaces a remote rest journey at a cleared node when new work arrives", () => {
+  const motion = new OfficeMotion();
+  const life = motion.add(actor, siteAt(0), "atlas", 0, { site: siteAt(80), slot: 0 });
+  let advanced = 0;
+  while (life.position.distanceTo(life.home) < 12 && advanced++ < 2000) motion.tick(0.1, false);
+  const before = life.position.clone();
+  motion.update({ ...life.actor, status: "thinking" });
+  expect(life.actor.status).toBe("thinking");
+  let nearestRest = Infinity;
+  const result = tickCrowd(motion, [life], 120, () => {
+    nearestRest = Math.min(nearestRest, life.position.distanceTo(life.rest));
+  });
+  expect(result.seconds).toBeLessThan(120);
+  expect(life.position.distanceTo(life.home)).toBeLessThan(0.05);
+  expect(nearestRest).toBeGreaterThan(40);
+  expect(before.distanceTo(life.home)).toBeGreaterThan(10);
+});
+
 it("retains and advances all 750 logical occupants with compact routes, then clears every reservation", () => {
   const actors: OfficeActor[] = Array.from({ length: 750 }, (_, i) => ({
     ...actor,

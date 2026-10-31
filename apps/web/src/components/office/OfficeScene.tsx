@@ -23,6 +23,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { type OfficeActor } from "@t3tools/client-runtime/state/office";
 import {
   ringSize,
+  ringLinks,
   projectRoomKey,
   restAreaKey,
   roomRotation,
@@ -218,10 +219,15 @@ function LoopFloor({ rings }: { rings: number }) {
                 </mesh>
               </group>
             ))}
-            <mesh position={[(ringSize(i)[0] + ringSize(i - 1)[0]) / 2, -0.18, ringSize(i - 1)[1]]}>
-              <boxGeometry args={[18, 0.35, 3]} />
-              <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
-            </mesh>
+            {ringLinks(i).map(([a, b]) => (
+              <mesh
+                key={`${a[0]}:${a[1]}:${b[0]}:${b[1]}`}
+                position={[(a[0] + b[0]) / 2, -0.18, (a[1] + b[1]) / 2]}
+              >
+                <boxGeometry args={[Math.abs(b[0] - a[0]) + 3, 0.35, Math.abs(b[1] - a[1]) + 3]} />
+                <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
+              </mesh>
+            ))}
           </group>
         ),
       )}

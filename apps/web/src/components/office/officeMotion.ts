@@ -12,6 +12,7 @@ import {
   roomPoint,
   roomLocal,
   routeBetweenSites,
+  ringSize,
   type Point,
   type RoomSite,
   type RoomVariant,
@@ -272,12 +273,12 @@ export class OfficeMotion {
     this.traffic.remove(life.key, life.visit);
     life.walking = false;
   }
-  private setRoute(life: Life, route: readonly Vector3[]) {
+  private setRoute(life: Life, route: readonly Vector3[], reserved = false) {
     life.route.splice(0, life.route.length, ...compactRoute(life.position, route));
     life.walking =
       life.route.length > 0 &&
       Math.min(life.position.distanceTo(life.home), life.position.distanceTo(life.rest)) > 0.1;
-    if (life.route.length)
+    if (life.route.length && !reserved)
       this.traffic.plan(
         life.key,
         life.position,
@@ -286,9 +287,19 @@ export class OfficeMotion {
         life.requested
           ? [...this.itemBoxes.values()].find((item) => item.owner === life.key)?.box
           : undefined,
+        this.travelShape(life, life.route.at(-1)!),
       );
-    else this.releaseTraffic(life);
+    else if (!life.route.length) this.releaseTraffic(life);
     life.routeBlocked = false;
+  }
+  private travelShape(life: Life, target: Vector3) {
+    const walk = bodyBounds[life.actor.child ? "child" : "main"].walk;
+    return {
+      side: walk.side,
+      front: walk.front,
+      source: lifeBodyBox(life, life.position, life.heading, false),
+      target: lifeBodyBox(life, target, this.arrivalHeading(life), false),
+    };
   }
   private indexBody(life: Life) {
     const box = lifeBodyBox(life);
@@ -307,23 +318,26 @@ export class OfficeMotion {
   }
   private claimTraffic(life: Life) {
     if (life.requested && !this.itemAvailable(life)) return false;
-    const claimed = this.traffic.claim(life.key, (start, end) => {
-      const heading = Math.atan2(end.x - start.x, end.z - start.z);
-      const from = lifeBodyBox(life, start, heading, true),
-        to = lifeBodyBox(life, end, heading, true);
-      const box: Obstacle = {
-        min: [Math.min(from.min[0], to.min[0]), Math.min(from.min[1], to.min[1])],
-        max: [Math.max(from.max[0], to.max[0]), Math.max(from.max[1], to.max[1])],
-      };
-      return (
-        [...this.itemBoxes.values()].some(
-          (item) => item.active && item.owner !== life.key && boxesOverlap(box, item.box),
-        ) || this.bodyBlocked(life, box, true)
-      );
-    });
-    if (claimed && life.requested) this.activateItem(life);
+    const claimed = this.traffic.claim(life.key, (start, end) =>
+      this.passageBlocked(life, start, end),
+    );
+    if (this.traffic.reserved(life.key) && life.requested) this.activateItem(life);
     if (claimed) life.walking = true;
     return claimed;
+  }
+  private passageBlocked(life: Life, start: Vector3, end: Vector3) {
+    const heading = Math.atan2(end.x - start.x, end.z - start.z);
+    const from = lifeBodyBox(life, start, heading, true),
+      to = lifeBodyBox(life, end, heading, true);
+    const box: Obstacle = {
+      min: [Math.min(from.min[0], to.min[0]), Math.min(from.min[1], to.min[1])],
+      max: [Math.max(from.max[0], to.max[0]), Math.max(from.max[1], to.max[1])],
+    };
+    return (
+      [...this.itemBoxes.values()].some(
+        (item) => item.active && item.owner !== life.key && boxesOverlap(box, item.box),
+      ) || this.bodyBlocked(life, box, true)
+    );
   }
   private itemAvailable(life: Life) {
     if (
@@ -501,15 +515,14 @@ export class OfficeMotion {
         : [];
     return [...obstacles[life.variant], berth, ...keyboard];
   }
-  private travel(life: Life, destination: "home" | "lobby") {
-    if (this.traffic.active(life.key)) {
-      // A narrow corridor must drain before reversing into its following traffic.
+  private travel(life: Life, destination: "home" | "lobby", cleared = false) {
+    if (!cleared && this.traffic.active(life.key)) {
+      // Continue to a graph node where a replacement passage can be reserved safely.
       life.pendingTravel = destination;
       return;
     }
-    this.releaseTraffic(life);
-    life.pendingTravel = null;
-    life.destination = destination;
+    if (!cleared) this.releaseTraffic(life);
+
     const homeRoute = this.homeRoute(life),
       restRoute = this.restRoute(life);
     if (!homeRoute || !restRoute) {
@@ -536,7 +549,28 @@ export class OfficeMotion {
       return;
     }
     let path: Vector3[];
-    if (inRoom) {
+    const corridor = cleared
+      ? Array.from(
+          { length: Math.max(life.site.ring, life.restSite?.ring ?? 0) + 1 },
+          (_, ring) => ring,
+        ).find((ring) => {
+          const [x, z] = ringSize(ring);
+          return (
+            (Math.abs(Math.abs(life.position.x) - x) < 0.001 && Math.abs(life.position.z) <= z) ||
+            (Math.abs(Math.abs(life.position.z) - z) < 0.001 && Math.abs(life.position.x) <= x)
+          );
+        })
+      : undefined;
+    if (cleared && corridor !== undefined) {
+      path = [
+        ...routeBetweenSites({ ...life.site, ring: corridor }, targetSite, [
+          life.position.x,
+          life.position.z,
+        ]).map(vector),
+        ...entry,
+      ];
+    } else if (cleared) return;
+    else if (inRoom) {
       const target =
         destination === "home"
           ? life.requested === "keyboard"
@@ -586,7 +620,24 @@ export class OfficeMotion {
     } else {
       path = [...restRoute, ...routeBetweenSites(life.restSite, targetSite).map(vector), ...entry];
     }
-    this.setRoute(life, path);
+    const priorDestination = life.destination;
+    life.destination = destination;
+    if (
+      cleared &&
+      !this.traffic.redirect(
+        life.key,
+        life.position,
+        compactRoute(life.position, path),
+        (a, b) => this.passageBlocked(life, a, b),
+        this.travelShape(life, path.at(-1)!),
+      )
+    ) {
+      life.destination = priorDestination;
+      return;
+    }
+    life.pendingTravel = null;
+    life.destination = destination;
+    this.setRoute(life, path, cleared);
     life.phase = "walking";
     life.routeBlocked = false;
   }
@@ -752,7 +803,7 @@ export class OfficeMotion {
     this.publish();
   }
   tick(delta: number, reduced: boolean): boolean {
-    this.traffic.beginFrame();
+    this.traffic.beginFrame(delta);
     this.bodies.clear();
     this.bodyBoxes.clear();
     for (const life of this.lives.values()) this.indexBody(life);
@@ -764,7 +815,7 @@ export class OfficeMotion {
         life.renderCell = cell;
         changedCell = true;
       }
-      if (life.actor.status === "offline") continue;
+      if (life.actor.status === "offline" && !this.traffic.active(life.key)) continue;
       if (life.performance) {
         moving = true;
         // Logical visits advance even when the rig is culled or its asset is still loading.
@@ -800,63 +851,45 @@ export class OfficeMotion {
           life.routeBlocked = true;
           continue;
         }
-        if (reduced) {
-          const target = life.route.at(-1)!;
-          if (this.bodyBlocked(life, lifeBodyBox(life, target, this.arrivalHeading(life), false))) {
-            life.routeBlocked = true;
-            continue;
+        let budget = delta * 0.9;
+        while (life.route.length && budget > 0.000001) {
+          const target = life.route[0]!,
+            direction = target.clone().sub(life.position),
+            distance = direction.length();
+          const length = Math.min(distance, budget);
+          const next = distance
+            ? life.position.clone().addScaledVector(direction, length / distance)
+            : target;
+          const heading = distance > 0.000001 ? Math.atan2(direction.x, direction.z) : life.heading;
+          const last = life.route.length === 1 && length === distance;
+          const blocked = this.bodyBlocked(
+            life,
+            lifeBodyBox(life, next, last ? this.arrivalHeading(life) : heading, !last),
+          );
+          life.routeBlocked = blocked;
+          if (blocked) break;
+          life.position.copy(next);
+          life.heading = heading;
+          budget -= length;
+          if (length === distance) {
+            life.route.shift();
+            if (life.route.length && life.pendingTravel) {
+              this.travel(life, life.pendingTravel, true);
+              if (!life.pendingTravel) budget = 0;
+            }
           }
-          life.position.copy(target);
-          life.route.splice(0);
-          this.releaseTraffic(life);
-          life.heading = this.arrivalHeading(life);
-          this.arrive(life, reduced);
-          this.indexBody(life);
-          continue;
-        }
-        if (!this.traffic.canMove(life.key, life.position, life.route)) {
-          life.routeBlocked = true;
-          continue;
-        }
-        const target = life.route[0]!,
-          direction = target.clone().sub(life.position),
-          distance = direction.length();
-        if (distance < 0.03) {
-          if (
-            life.route.length === 1 &&
-            this.bodyBlocked(life, lifeBodyBox(life, target, this.arrivalHeading(life), false))
-          ) {
-            life.routeBlocked = true;
-            continue;
-          }
-          life.position.copy(target);
-          life.route.shift();
-          if (life.route.length === 0) {
-            this.releaseTraffic(life);
+          if (!life.route.length) {
+            this.traffic.arrive(life.key);
+            life.walking = false;
             life.heading = this.arrivalHeading(life);
             this.arrive(life, reduced);
+            budget = 0;
           }
           this.indexBody(life);
-          continue;
         }
-        const next = life.position
-          .clone()
-          .addScaledVector(direction, Math.min(distance, delta * (reduced ? 8 : 0.9)) / distance);
-        const heading =
-          Math.hypot(direction.x, direction.z) > 0.01
-            ? Math.atan2(direction.x, direction.z)
-            : life.heading;
-        const blocked = this.bodyBlocked(life, lifeBodyBox(life, next, heading));
-
-        life.routeBlocked = blocked;
-        if (blocked) continue;
-        life.position.copy(next);
-        if (Math.hypot(direction.x, direction.z) > 0.01)
-          life.heading = Math.atan2(direction.x, direction.z);
-        this.indexBody(life);
-        this.traffic.advance(life.key, life.position, life.route);
         continue;
       }
+
       if (life.requested) {
         const p = PERFORMANCES[life.requested],
           target =

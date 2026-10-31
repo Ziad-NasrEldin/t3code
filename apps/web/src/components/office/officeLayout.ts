@@ -20,7 +20,7 @@ export function restAreaKey(slot: number): string | null {
 }
 export function ringSize(ring: number): Point {
   // The fixed lobby rooms need the same 7.5-unit door setback as the outer modules.
-  return [9.5 + ring * 18, ring === 0 ? 8 : 8.5 + ring * 18];
+  return [9.5 + ring * 18, ring === 0 ? 8.08 : 8.5 + ring * 18];
 }
 export function ringSites(ring: number): ReadonlyArray<Omit<RoomSite, "index">> {
   if (ring === 0)
@@ -113,74 +113,95 @@ export function roomDoor(site: RoomSite): Point {
   if (site.side === "east") return [x, site.z];
   return [-x, site.z];
 }
-function aroundRing(ring: number, start: Point, end: Point): Point[] {
-  const [x, z] = ringSize(ring),
-    perimeter = 4 * (x + z);
-  // A clear side has no junction between these points. A local reversal must
-  // not force a complete circuit; whole-journey admission drains opposing use.
-  if (
-    (start[0] === end[0] && Math.abs(start[0]) === x) ||
-    (start[1] === end[1] && Math.abs(start[1]) === z)
-  )
-    return [start, end];
-  const at = (p: Point) =>
-    Math.abs(p[1] + z) < 0.001
-      ? p[0] + x
-      : Math.abs(p[0] - x) < 0.001
-        ? 2 * x + p[1] + z
-        : Math.abs(p[1] - z) < 0.001
-          ? 2 * x + 2 * z + x - p[0]
-          : 4 * x + 2 * z + z - p[1];
-  const first = at(start),
-    length = (at(end) - first + perimeter) % perimeter;
-  const corners: Array<{ at: number; point: Point }> = [
-    { at: 0, point: [-x, -z] },
-    { at: 2 * x, point: [x, -z] },
-    { at: 2 * (x + z), point: [x, z] },
-    { at: 4 * x + 2 * z, point: [-x, z] },
-  ];
-  return [
-    start,
-    ...corners
-      .map((corner) => ({
-        point: corner.point,
-        distance: (corner.at - first + perimeter) % perimeter,
-      }))
-      .filter((corner) => corner.distance > 0 && corner.distance < length)
-      .sort((a, b) => a.distance - b.distance)
-      .map((corner) => corner.point),
-    end,
-  ];
+// The four corner gaps are reserved independently of room occupancy. Each link
+// crosses outside the complete inner room footprint, never through a project.
+export function ringLinks(ring: number): ReadonlyArray<readonly [Point, Point]> {
+  const inner = ringSize(ring - 1),
+    outer = ringSize(ring);
+  return [-1, 1].flatMap((x) =>
+    [-1, 1].flatMap((z) => [
+      [
+        [x * inner[0], z * inner[1]],
+        [x * outer[0], z * inner[1]],
+      ] as const,
+      [
+        [x * inner[0], z * inner[1]],
+        [x * inner[0], z * outer[1]],
+      ] as const,
+    ]),
+  );
 }
 export function routeBetweenSites(
   from: RoomSite | null,
   to: RoomSite | null,
+  origin?: Point,
 ): ReadonlyArray<Point> {
-  if (!from && !to) return [[7, 0]];
-  let ring = from?.ring ?? 0;
-  const targetRing = to?.ring ?? 0;
-  let at: Point = from ? roomDoor(from) : [9.5, 0];
-  const points: Point[] = from ? [] : [[7, 0]];
-  // One-way rings let a convoy keep moving on the existing narrow floor; links drain before reversing.
-  while (ring !== targetRing) {
+  if (!from && !to && !origin) return [[7, 0]];
+  const points: Point[] = [],
+    rings: number[][] = [],
+    edges = new Map<number, number[]>();
+  const add = (ring: number, p: Point) => {
+    const id = points.length;
+    points.push(p);
+    (rings[ring] ??= []).push(id);
+    edges.set(id, []);
+    return id;
+  };
+  const connect = (a: number, b: number) => {
+    edges.get(a)!.push(b);
+    edges.get(b)!.push(a);
+  };
+  const first = add(from?.ring ?? 0, origin ?? (from ? roomDoor(from) : [9.5, 0]));
+  const last = add(to?.ring ?? 0, to ? roomDoor(to) : [9.5, 0]);
+  for (let ring = 0; ring <= Math.max(from?.ring ?? 0, to?.ring ?? 0); ring++) {
     const [x, z] = ringSize(ring);
-    if (ring > targetRing) {
-      const inner = ringSize(ring - 1);
-      points.push(...aroundRing(ring, at, [x, inner[1]]), inner);
-      at = inner;
-      ring--;
-    } else {
-      const outer = ringSize(ring + 1);
-      points.push(...aroundRing(ring, at, [x, z]), [outer[0], z]);
-      at = [outer[0], z];
-      ring++;
+    for (const p of [
+      [-x, -z],
+      [x, -z],
+      [x, z],
+      [-x, z],
+    ] as Point[])
+      add(ring, p);
+    if (ring) for (const [a, b] of ringLinks(ring)) connect(add(ring - 1, a), add(ring, b));
+  }
+  for (let ring = 0; ring < rings.length; ring++) {
+    const [x, z] = ringSize(ring);
+    const along = ([px, pz]: Point) =>
+      Math.abs(pz + z) < 0.001
+        ? px + x
+        : Math.abs(px - x) < 0.001
+          ? 2 * x + pz + z
+          : Math.abs(pz - z) < 0.001
+            ? 3 * x + 2 * z - px
+            : 4 * x + 3 * z - pz;
+    const ids = rings[ring]!.sort((a, b) => along(points[a]!) - along(points[b]!));
+    for (let i = 0; i < ids.length; i++) connect(ids[i]!, ids[(i + 1) % ids.length]!);
+  }
+  const distances = points.map(() => Infinity),
+    previous = new Map<number, number>(),
+    pending = new Set(points.map((_, i) => i));
+  distances[first] = 0;
+  while (pending.size) {
+    let at = -1;
+    for (const id of pending) if (at < 0 || distances[id]! < distances[at]!) at = id;
+    pending.delete(at);
+    if (at === last) break;
+    for (const next of edges.get(at)!) {
+      const a = points[at]!,
+        b = points[next]!;
+      const distance = distances[at]! + Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+      if (distance < distances[next]!) {
+        distances[next] = distance;
+        previous.set(next, at);
+      }
     }
   }
-  points.push(...aroundRing(ring, at, to ? roomDoor(to) : [9.5, 0]));
-  if (!to) points.push([7, 0]);
-  return points.filter(
-    (p, i) => i === 0 || p[0] !== points[i - 1]![0] || p[1] !== points[i - 1]![1],
-  );
+  const path: Point[] = [];
+  for (let at: number | undefined = last; at !== undefined; at = previous.get(at))
+    path.unshift(points[at]!);
+  if (!from && !origin) path.unshift([7, 0]);
+  if (!to) path.push([7, 0]);
+  return path.filter((p, i) => i === 0 || p[0] !== path[i - 1]![0] || p[1] !== path[i - 1]![1]);
 }
 export function routeToLobby(site: RoomSite): ReadonlyArray<Point> {
   return routeBetweenSites(site, null);
