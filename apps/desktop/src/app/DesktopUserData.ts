@@ -34,9 +34,11 @@ export class DesktopUserDataInitializationError extends Schema.TaggedError<Deskt
 export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPath")(
   function* (input: {
     readonly appDataDirectory: string;
+    readonly userDataDirectory?: string | undefined;
     readonly isDevelopment: boolean;
     readonly platform: NodeJS.Platform;
   }) {
+    if (input.userDataDirectory) return input.userDataDirectory;
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const names = input.isDevelopment
