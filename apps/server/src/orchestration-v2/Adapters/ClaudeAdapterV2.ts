@@ -7361,7 +7361,6 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerTurnId: input.context.providerTurnId,
               nativeItemId: input.context.assistant.fallbackNativeItemId,
               text: input.context.assistant.fallbackText,
-              responseKind: "final",
               ordinal,
               startedAt: input.context.startedAt,
               completedAt: input.completedAt,

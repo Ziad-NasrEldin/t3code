@@ -7486,6 +7486,36 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("keeps result-only fallback finality unknown", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("result-only-finality"),
+          text: "Go.",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "result-only", result: "Done." }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      const message = harness.events.find(
+        (event) => event.type === "message.updated" && event.message.text === "Done.",
+      );
+      assert.isTrue(message?.type === "message.updated");
+      if (message?.type === "message.updated") assert.isUndefined(message.message.responseKind);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(IdAllocator.layer, McpProviderSessions.layer, NodeServices.layer),
+      ),
+    ),
+  );
+
   it.effect("resolves API retries on resumed assistant activity", () =>
     Effect.scoped(
       Effect.gen(function* () {
