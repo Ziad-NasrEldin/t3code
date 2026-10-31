@@ -38,17 +38,18 @@ it("keeps item reservations exclusive and stops decorative use without changing 
   expect(motion.request(actor.key, "coffee")).not.toBeNull();
   for (let step = 0; step < 10000 && life.performance === null; step++) motion.tick(0.1, false);
   expect(life.performance).toBe("coffee");
-  // Finish at the actual use start, then immediately repeat before the rest journey advances.
+  // A real click arrives after the return walk has already advanced a few frames.
   for (let step = 0; step < 130 && life.performance; step++) motion.tick(0.1, false);
   expect(life.performance).toBeNull();
+  for (let step = 0; step < 4; step++) motion.tick(0.1, false);
   expect(motion.request(actor.key, "coffee")).toBeNull();
   expect(
     life.route.reduce(
       (distance, point, i) => distance + point.distanceTo(i ? life.route[i - 1]! : life.position),
       0,
     ),
-  ).toBeLessThan(0.2);
-  for (let step = 0; step < 3 && !life.performance; step++) motion.tick(0.1, false);
+  ).toBeLessThan(1);
+  for (let step = 0; step < 15 && !life.performance; step++) motion.tick(0.1, false);
   expect(life.performance).toBe("coffee");
   life.performanceReady = true;
   motion.update({ ...actor, status: "waiting" });

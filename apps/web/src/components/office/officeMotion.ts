@@ -644,7 +644,18 @@ export class OfficeMotion {
       amenity === "keyboard"
         ? null
         : lobbyPath(start, p.start, life.actor.child, this.occupiedLobbyPoints(life));
-    if (this.traffic.active(key)) {
+    if (
+      amenity !== "keyboard" &&
+      this.lobbyVisitor === key &&
+      Math.abs(life.position.x) <= 7.8 &&
+      Math.abs(life.position.z) <= 6.8 &&
+      local
+    ) {
+      life.pendingTravel = null;
+      life.destination = "lobby";
+      this.setRoute(life, local);
+      life.phase = "approach";
+    } else if (this.traffic.active(key)) {
       this.travel(life, amenity === "keyboard" ? "home" : "lobby");
     } else if (amenity === "keyboard") {
       const localPosition = roomLocal(life.site, life.variant, [life.position.x, life.position.z]);
