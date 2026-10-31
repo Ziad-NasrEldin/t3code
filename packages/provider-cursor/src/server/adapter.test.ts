@@ -428,6 +428,19 @@ describe("CursorAdapterV2", () => {
       assert.equal(terminal?.status, failure === null ? "completed" : "failed");
       assert.equal(terminal?.failure?.class, failure?.class);
       assert.equal(terminal?.failure?.message, failure?.message);
+      if (
+        updates.some((update) => update.type === "turn-ended") &&
+        updates.some((update) => update.type === "text-delta" && update.text === "The answer.")
+      ) {
+        const answer = events
+          .filter(
+            (event) => event.type === "message.updated" && event.message.text === "The answer.",
+          )
+          .at(-1);
+        assert.isTrue(
+          answer?.type === "message.updated" && answer.message.responseKind === "final",
+        );
+      }
       if (answers !== undefined) {
         assert.deepEqual(
           events.flatMap((event) =>

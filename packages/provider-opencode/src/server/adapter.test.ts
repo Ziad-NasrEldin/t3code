@@ -787,6 +787,7 @@ describe("OpenCodeAdapterV2", () => {
                 id: "late-assistant",
                 sessionID: nativeSessionId,
                 role: "assistant",
+                finish: "stop",
                 time: { created: 1, completed: 4 },
               },
             },
@@ -822,6 +823,11 @@ describe("OpenCodeAdapterV2", () => {
         const assistant = items.filter((item) => item.type === "assistant_message");
         assert.equal(assistant.at(-1)?.text, "Tool results received");
         assert.equal(assistant.at(-1)?.status, "completed");
+        assert.equal(assistant.at(-1)?.responseKind, "final");
+        const finals = events.filter(
+          (event) => event.type === "message.updated" && event.message.responseKind === "final",
+        );
+        assert.isAbove(finals.length, 0);
       }).pipe(
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
         Effect.scoped,
@@ -918,6 +924,19 @@ describe("OpenCodeAdapterV2", () => {
       yield* push(status(child, "idle"));
       yield* push({ type: "session.idle", properties: { sessionID: child } });
       assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+      const deleted = yield* harness.runtime.events.pipe(
+        Stream.filter(
+          (event) => event.type === "subagent.updated" && event.subagent.closedAt != null,
+        ),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* push({
+        type: "session.deleted",
+        properties: { info: { id: child, parentID: root, time: { created: 2, updated: 4 } } },
+      });
+      const closed = Option.getOrUndefined(yield* Fiber.join(deleted));
+      assert.isTrue(closed?.type === "subagent.updated" && closed.subagent.closedAt != null);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -1455,6 +1474,7 @@ describe("OpenCodeAdapterV2", () => {
             id: "assistant-kept",
             sessionID: nativeSessionId,
             role: "assistant",
+            finish: "stop",
             time: { created: 2, completed: 3 },
           },
           parts: [{ type: "text", text: "keep this answer" }],
@@ -1518,6 +1538,10 @@ describe("OpenCodeAdapterV2", () => {
         ["user-kept", "assistant-kept"],
       );
       assert.equal(snapshot.providerThread.nativeConversationHeadRef?.nativeId, "user-kept");
+      assert.equal(
+        snapshot.messages.find((message) => message.role === "assistant")?.responseKind,
+        "final",
+      );
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

@@ -620,9 +620,13 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
-  it.effect.each([false, true])(
-    "completes a resumed user turn before native wake events arrive, Pi streaming=%s",
-    (streaming) =>
+  it.effect.each(
+    [false, true].flatMap((streaming) =>
+      ["stop", "toolUse", "aborted", "error", undefined].map((reason) => ({ streaming, reason })),
+    ),
+  )(
+    "completes a resumed user turn before native wake events arrive, Pi streaming=$streaming, stop=$reason",
+    ({ streaming, reason }) =>
       Effect.gen(function* () {
         const fake = yield* makeFakePi;
         const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -640,14 +644,30 @@ describe("PiAdapterV2", () => {
           type: "message_end",
           message: {
             role: "assistant",
-            content: [{ type: "text", text: "Resumed prompt completed" }],
-            stopReason: "stop",
+            content: [
+              { type: "text", text: "Resumed prompt completed" },
+              { type: "text", text: "Second final part" },
+            ],
+            ...(reason === undefined ? {} : { stopReason: reason }),
           },
         });
+        for (const text of ["Resumed prompt completed", "Second final part"]) {
+          const final = yield* takeEvent(
+            (event) => event.type === "message.updated" && event.message.text === text,
+          );
+          assert.isTrue(
+            final.type === "message.updated" &&
+              final.message.responseKind ===
+                (reason === "stop" ? "final" : reason === "toolUse" ? "commentary" : undefined),
+          );
+        }
         fake.queueState({ isStreaming: false });
         yield* fake.emit({ type: "agent_settled" });
         const terminal = yield* takeEvent((event) => event.type === "turn.terminal");
-        assert.isTrue(terminal.type === "turn.terminal" && terminal.status === "completed");
+        assert.isTrue(
+          terminal.type === "turn.terminal" &&
+            terminal.status === (reason === "error" ? "failed" : "completed"),
+        );
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
@@ -3485,6 +3505,7 @@ describe("PiAdapterV2", () => {
           {
             role: "assistant",
             content: [{ type: "text", text: "hello back" }],
+            stopReason: "stop",
             timestamp: 1700000001000,
           },
           { role: "toolResult", content: [] },
@@ -3496,6 +3517,7 @@ describe("PiAdapterV2", () => {
       assert.equal(snapshot.messages[0]!.text, "hello pi");
       assert.equal(snapshot.messages[1]!.role, "assistant");
       assert.equal(snapshot.messages[1]!.text, "hello back");
+      assert.equal(snapshot.messages[1]!.responseKind, "final");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

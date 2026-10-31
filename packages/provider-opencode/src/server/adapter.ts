@@ -351,6 +351,7 @@ export const reconcileOpenCodePromptAdmissionStatus = Effect.fn(
 });
 
 interface OpenCodeSubagentContext {
+  task?: OrchestrationV2Subagent;
   readonly nativeItemId: string;
   readonly nodeId: OrchestrationV2Subagent["id"];
   readonly parentState: OpenCodeThreadState;
@@ -373,6 +374,7 @@ interface OpenCodeThreadState {
   readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
   readonly runtimeRequests: Map<string, OrchestrationV2RuntimeRequest>;
   readonly messageRoles: Map<string, "user" | "assistant">;
+  readonly responseKinds: Map<string, "final" | "commentary">;
   readonly userMessageIds: Array<string>;
   parentSubagent: OpenCodeSubagentContext | null;
   nextChildTurnOrdinal: number;
@@ -1183,6 +1185,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const isCompleted = forceCompleted || part.time?.end !== undefined;
           const startedAt = dateTimeFromEpoch(part.time?.start, emittedAt);
           const completedAt = isCompleted ? dateTimeFromEpoch(part.time?.end, emittedAt) : null;
+          const responseKind = state.responseKinds.get(part.messageID);
           const nativeItemRef = providerRef(part.id);
           const nodeId = idAllocator.derive.nodeFromProviderItem({
             driver: OPENCODE_PROVIDER,
@@ -1227,6 +1230,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               runId: turn.runId,
               nodeId,
               role: "assistant",
+              ...(responseKind ? { responseKind } : {}),
               text: part.text,
               attachments: [],
               streaming: !isCompleted,
@@ -1258,6 +1262,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 updatedAt: emittedAt,
                 type: "assistant_message",
                 messageId,
+                ...(responseKind ? { responseKind } : {}),
                 text: part.text,
                 streaming: !isCompleted,
               },
@@ -1405,6 +1410,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               providerTurns: new Map(),
               runtimeRequests: new Map(),
               messageRoles: new Map(),
+              responseKinds: new Map(),
               userMessageIds: [],
               parentSubagent: context,
               nextChildTurnOrdinal: 1,
@@ -1451,6 +1457,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             title,
             model: context.model,
             status: subagentStatus,
+            ...(context.task?.closedAt ? { closedAt: context.task.closedAt } : {}),
             result: context.result,
             startedAt: context.startedAt,
             completedAt,
@@ -1477,6 +1484,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               completedAt,
             },
           });
+          context.task = subagent;
           yield* emitProviderEvent({
             type: "subagent.updated",
             driver: OPENCODE_PROVIDER,
@@ -2506,6 +2514,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           if (state === undefined || turn === null || turn === undefined) return;
           // Versions may ignore supplied message IDs; completed assistant output admits settlement on idle.
           advanceOpenCodePromptAdmission(turn, "assistant-completed");
+          if (message.finish === "stop" || message.finish === "tool-calls")
+            state.responseKinds.set(message.id, message.finish === "stop" ? "final" : "commentary");
           for (const partId of turn.partIdsByMessage.get(message.id) ?? []) {
             const part = turn.parts.get(partId);
             if (part?.type === "text" || part?.type === "reasoning") {
@@ -2586,10 +2596,22 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               }
               return;
             }
-            case "session.deleted":
-              relatedSessionOwners.delete(event.properties.info.id);
-              busySessionIds.delete(event.properties.info.id);
+            case "session.deleted": {
+              const id = event.properties.info.id;
+              const context = subagentsByChildSessionId.get(id);
+              if (context?.task) {
+                const now = yield* DateTime.now;
+                context.task = { ...context.task, closedAt: now, updatedAt: now };
+                yield* emitProviderEvent({
+                  type: "subagent.updated",
+                  driver: OPENCODE_PROVIDER,
+                  subagent: context.task,
+                });
+              }
+              relatedSessionOwners.delete(id);
+              busySessionIds.delete(id);
               return;
+            }
             case "session.status": {
               const sessionId = event.properties.sessionID;
               switch (event.properties.status.type) {
@@ -2804,6 +2826,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             providerTurns: new Map(),
             runtimeRequests: new Map(),
             messageRoles: new Map(),
+            responseKinds: new Map(),
             userMessageIds: [],
             parentSubagent,
             nextChildTurnOrdinal: 1,
@@ -2906,6 +2929,13 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   runId: null,
                   nodeId: null,
                   role: info.role,
+                  ...(info.role === "assistant" &&
+                  (info.finish === "stop" || info.finish === "tool-calls")
+                    ? {
+                        responseKind:
+                          info.finish === "stop" ? ("final" as const) : ("commentary" as const),
+                      }
+                    : {}),
                   text,
                   attachments: [],
                   streaming: false,

@@ -197,6 +197,8 @@ interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
+  readonly completedTexts: Map<string, OpenBlock>;
+  readonly responseKinds: Map<string, "final" | "commentary">;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
   readonly ordinals: Map<string, number>;
@@ -270,6 +272,9 @@ interface OpenBlock {
 }
 
 interface ThreadState {
+  closedAt?: DateTime.Utc;
+  // Deletion must release every settled/joined call, retaining task records rather than turn closures.
+  subagentRecords?: Map<string, OrchestrationV2Subagent>;
   readonly sessionId: string;
   providerThread: OrchestrationV2ProviderThread;
   readonly providerTurns: Map<string, OrchestrationV2ProviderTurn>;
@@ -907,15 +912,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ) {
       const nativeId = `${data.assistantMessageID}:${kind}:${data.ordinal}`;
       const updatedAt = yield* DateTime.now;
-      const entry = turn.texts.get(nativeId) ?? {
-        block: data,
-        kind,
-        startedAt: updatedAt,
-        text: "",
-      };
+      const entry = turn.texts.get(nativeId) ??
+        turn.completedTexts.get(nativeId) ?? {
+          block: data,
+          kind,
+          startedAt: updatedAt,
+          text: "",
+        };
       entry.text = update(entry.text);
-      if (completed) turn.texts.delete(nativeId);
-      else turn.texts.set(nativeId, entry);
+      if (completed) {
+        turn.texts.delete(nativeId);
+        turn.completedTexts.set(nativeId, entry);
+      } else {
+        turn.completedTexts.delete(nativeId);
+        turn.texts.set(nativeId, entry);
+      }
       if (entry.text.length === 0) return;
       const status = completed ? "completed" : "running";
       const completedAt = completed ? updatedAt : null;
@@ -934,7 +945,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         driver,
         nativeItemId: nativeId,
       });
+      const responseKind = turn.responseKinds.get(data.assistantMessageID);
       const message: OrchestrationV2ConversationMessage = {
+        ...(responseKind ? { responseKind } : {}),
         createdBy: "agent",
         creationSource: "provider",
         id: messageId,
@@ -956,6 +969,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           ...base,
           type: "assistant_message",
           messageId,
+          ...(responseKind ? { responseKind } : {}),
           text: entry.text,
           streaming: !completed,
         },
@@ -1105,6 +1119,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       input: owner,
       providerTurn,
       texts: new Map(),
+      completedTexts: new Map(),
+      responseKinds: new Map(),
       tools: new Map(),
       startedAt: new Map(),
       ordinals: new Map(),
@@ -1159,31 +1175,33 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           completedAt,
         },
       });
-      yield* emit({
-        type: "subagent.updated",
+      const subagent: OrchestrationV2Subagent = {
+        id: nodeId,
+        threadId: turn.input.threadId,
+        runId: turn.input.runId,
+        parentNodeId: turn.input.rootNodeId,
+        origin: "provider_native",
+        createdBy: "agent",
         driver,
-        subagent: {
-          id: nodeId,
-          threadId: turn.input.threadId,
-          runId: turn.input.runId,
-          parentNodeId: turn.input.rootNodeId,
-          origin: "provider_native",
-          createdBy: "agent",
-          driver,
-          providerInstanceId: instanceId,
-          providerThreadId: childProviderThreadId,
-          childThreadId,
-          nativeTaskRef: ref(call.nativeId),
-          prompt: call.prompt,
-          title: call.title,
-          model: call.model,
-          status: call.status,
-          result: call.result,
-          startedAt: call.startedAt,
-          completedAt,
-          updatedAt,
-        },
-      });
+        providerInstanceId: instanceId,
+        providerThreadId: childProviderThreadId,
+        childThreadId,
+        nativeTaskRef: ref(call.nativeId),
+        prompt: call.prompt,
+        title: call.title,
+        model: call.model,
+        status: call.status,
+        ...(call.child?.closedAt ? { closedAt: call.child.closedAt } : {}),
+        result: call.result,
+        startedAt: call.startedAt,
+        completedAt,
+        updatedAt,
+      };
+      if (call.child) {
+        call.child.subagentRecords ??= new Map();
+        call.child.subagentRecords.set(subagent.id, subagent);
+      }
+      yield* emit({ type: "subagent.updated", driver, subagent });
       yield* emit({
         type: "turn_item.updated",
         driver,
@@ -2102,6 +2120,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           return yield* emitCompaction(state, turn, "failed");
         case "session.step.ended":
         case "session.step.failed": {
+          if (
+            event.type === "session.step.ended" &&
+            (event.data.finish === "stop" || event.data.finish === "tool-calls")
+          ) {
+            turn.responseKinds.set(
+              event.data.assistantMessageID,
+              event.data.finish === "stop" ? "final" : "commentary",
+            );
+            for (const entry of [...turn.completedTexts.values(), ...turn.texts.values()]) {
+              if (entry.block.assistantMessageID === event.data.assistantMessageID)
+                yield* emitText(state, turn, entry.block, entry.kind, () => entry.text, true);
+            }
+          }
           const tokens = event.data.tokens;
           if (tokens === undefined) return;
           turn.steps += 1;
@@ -2254,6 +2285,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
       const sessionId = sessionOfEvent(event);
+      if (event.type === "session.deleted") {
+        const deleted = threads.get(event.data.sessionID);
+        if (deleted?.subagent) {
+          deleted.closedAt ??= yield* DateTime.now;
+          for (const [id, task] of deleted.subagentRecords ?? []) {
+            const closed = { ...task, closedAt: deleted.closedAt, updatedAt: deleted.closedAt };
+            deleted.subagentRecords!.set(id, closed);
+            yield* emit({ type: "subagent.updated", driver, subagent: closed });
+          }
+        }
+        busy.delete(event.data.sessionID);
+        return;
+      }
       const cleared = sessionId === undefined ? undefined : clearing.get(sessionId);
       if (cleared !== undefined) {
         if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
@@ -2492,6 +2536,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       for (const message of recent.toReversed()) {
         if (message.type !== "assistant" || state.active !== turn) continue;
+        if (message.finish === "stop" || message.finish === "tool-calls")
+          turn.responseKinds.set(message.id, message.finish === "stop" ? "final" : "commentary");
         const ordinals = { text: 0, reasoning: 0 };
         for (const part of message.content) {
           if (part.type === "text" || part.type === "reasoning") {
@@ -2938,6 +2984,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             runId: null,
             nodeId: null,
             role: message.type,
+            ...(message.type === "assistant" &&
+            (message.finish === "stop" || message.finish === "tool-calls")
+              ? {
+                  responseKind:
+                    message.finish === "stop" ? ("final" as const) : ("commentary" as const),
+                }
+              : {}),
             text,
             attachments: [],
             streaming: false,

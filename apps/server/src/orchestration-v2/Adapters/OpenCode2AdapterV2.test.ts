@@ -625,6 +625,19 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           ordinal: 0,
           text: "DONE",
         }),
+        event("session.text.ended", {
+          sessionID: SESSION,
+          assistantMessageID: "msg_0eb735d5b001oAFVeY5jz3WD4Z",
+          ordinal: 1,
+          text: "PART2",
+        }),
+        event("session.step.ended", {
+          sessionID: SESSION,
+          assistantMessageID: "msg_0eb735d5b001oAFVeY5jz3WD4Z",
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+        }),
         event("session.execution.succeeded", { sessionID: SESSION }),
       ]);
       const collected = yield* runtime.events.pipe(
@@ -634,6 +647,14 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       );
       yield* runtime.startTurn(turnInput(thread));
       const seen = yield* Fiber.join(collected);
+      assert.isTrue(
+        seen.some(
+          (event) =>
+            event.type === "message.updated" &&
+            event.message.text === "PART2" &&
+            event.message.responseKind === "final",
+        ),
+      );
       const terminals = seen.filter((event) => event.type === "turn.terminal");
       assert.deepEqual(
         terminals.map((event) => event.type === "turn.terminal" && event.status),
@@ -644,7 +665,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           (event) =>
             event.type === "turn_item.updated" &&
             event.turnItem.type === "assistant_message" &&
-            event.turnItem.text === "DONE",
+            event.turnItem.text === "DONE" &&
+            event.turnItem.responseKind === "final",
         ),
       );
     }).pipe(Effect.scoped),
@@ -922,13 +944,32 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
             delivery: "steer",
           },
         }),
+        {
+          type: "emit_inbound",
+          frame: {
+            type: "sdk.event",
+            event: {
+              id: "evt_sessiondeleted0000",
+              created: 1,
+              type: "session.deleted",
+              data: { sessionID: CHILD },
+              durable: { aggregateID: CHILD, seq: 1, version: 2 },
+            },
+          },
+        },
         event("session.usage.updated", { sessionID: SESSION }),
       ]);
       const reported = yield* Deferred.make<void>();
+      const closed = yield* Deferred.make<void>();
+      let completedWithoutClosure = false;
       yield* runtime.events.pipe(
         Stream.tap((event) =>
           event.type === "subagent.updated" && event.subagent.status === "completed"
-            ? Deferred.succeed(reported, undefined)
+            ? Effect.gen(function* () {
+                if (event.subagent.closedAt != null) yield* Deferred.succeed(closed, undefined);
+                else completedWithoutClosure = true;
+                yield* Deferred.succeed(reported, undefined);
+              })
             : Effect.void,
         ),
         Stream.runDrain,
@@ -936,6 +977,8 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
       );
       yield* runtime.startTurn(withLineage(thread));
       yield* Deferred.await(reported);
+      yield* Deferred.await(closed);
+      assert.isTrue(completedWithoutClosure);
       assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
       assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
     }).pipe(Effect.scoped),
@@ -2800,6 +2843,10 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
           ["user", history.data[0]!.text],
           ["assistant", "391 is not prime: it's the product 17 × 23."],
         ],
+      );
+      assert.equal(
+        snapshot.messages.find((message) => message.role === "assistant")?.responseKind,
+        "final",
       );
       assert.equal(
         snapshot.providerThread.nativeConversationHeadRef?.nativeId,

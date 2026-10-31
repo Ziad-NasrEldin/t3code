@@ -310,6 +310,7 @@ interface PiStreamItemState {
   readonly nativeItemId: string;
   readonly kind: "assistant_message" | "reasoning";
   text: string;
+  responseKind?: "final" | "commentary";
   completed: boolean;
   flushScheduled: boolean;
   readonly startedAt: DateTime.Utc;
@@ -893,6 +894,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                 type: "assistant_message",
                 messageId,
                 text: item.text,
+                ...(item.responseKind ? { responseKind: item.responseKind } : {}),
                 streaming,
               },
             });
@@ -908,6 +910,7 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   nativeItemId: item.nativeItemId,
                 }),
                 role: "assistant",
+                ...(item.responseKind ? { responseKind: item.responseKind } : {}),
                 text: item.text,
                 attachments: [],
                 streaming,
@@ -1786,6 +1789,29 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
             if (turn === null) return;
             const message = event["message"];
             if (recordString(message, "role") !== "assistant") return;
+            const reason = recordString(message, "stopReason");
+            const responseKind =
+              reason === "stop" ? "final" : reason === "toolUse" ? "commentary" : undefined;
+            const content = recordField(message, "content");
+            if (Array.isArray(content)) {
+              for (let index = 0; index < content.length; index++) {
+                const block = content[index];
+                if (recordString(block, "type") !== "text") continue;
+                const item = yield* streamItemFor(turn, "assistant_message", index);
+                item.text = recordString(block, "text") ?? item.text;
+              }
+            }
+            // A message_end can carry only a stop reason after text_end blocks.
+            for (const item of turn.streamItems.values()) {
+              if (
+                !item.nativeItemId.startsWith(`${turn.providerTurn.id}:m${turn.messageOrdinal}:`) ||
+                item.kind !== "assistant_message"
+              )
+                continue;
+              if (responseKind) item.responseKind = responseKind;
+              item.completed = true;
+              if (item.text.length) yield* emitStreamItem(turn, item, false);
+            }
             yield* completeOpenStreamItems(turn);
             if (recordString(message, "stopReason") === "error" && turn.failure === null) {
               turn.failure = makeProviderFailure({
@@ -2839,6 +2865,11 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                     runId: null,
                     nodeId: null,
                     role: role as "user" | "assistant",
+                    ...(role === "assistant" && recordString(message, "stopReason") === "stop"
+                      ? { responseKind: "final" as const }
+                      : role === "assistant" && recordString(message, "stopReason") === "toolUse"
+                        ? { responseKind: "commentary" as const }
+                        : {}),
                     text,
                     attachments: [],
                     streaming: false,

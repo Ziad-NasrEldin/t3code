@@ -913,6 +913,7 @@ interface ActiveCursorSubagent {
 }
 
 interface ActiveCursorTextSegment {
+  responseKind?: "final" | "commentary";
   readonly nativeItemId: string;
   readonly startedAt: DateTime.Utc;
   text: string;
@@ -933,6 +934,7 @@ interface ActiveCursorTurn {
   readonly tools: Map<string, ActiveCursorToolCall>;
   readonly subagents: Map<string, ActiveCursorSubagent>;
   readonly assistant: ActiveCursorTextStream;
+  lastAssistant: ActiveCursorTextSegment | null;
   assistantReply: CursorTransportFailure;
   readonly reasoning: ActiveCursorTextStream;
   interrupted: boolean;
@@ -1044,8 +1046,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         const emitAssistant = Effect.fnUntraced(function* (
           context: ActiveCursorTurn,
           completed: boolean,
+          segment = context.assistant.current,
         ) {
-          const segment = context.assistant.current;
           if (segment === null || segment.text.length === 0) {
             return;
           }
@@ -1101,6 +1103,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               nodeId,
               role: "assistant",
               text: segment.text,
+              ...(segment.responseKind ? { responseKind: segment.responseKind } : {}),
               attachments: [],
               streaming: !completed,
               createdAt: segment.startedAt,
@@ -1127,6 +1130,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               updatedAt: now,
               type: "assistant_message",
               messageId,
+              ...(segment.responseKind ? { responseKind: segment.responseKind } : {}),
               text: segment.text,
               streaming: !completed,
             },
@@ -1224,6 +1228,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return;
           }
           yield* emitAssistant(context, true);
+          context.lastAssistant = context.assistant.current;
           context.assistant.current = null;
         });
 
@@ -2036,15 +2041,29 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             case "tool-call-started":
             case "partial-tool-call":
             case "tool-call-completed":
+              if (context.assistant.current) context.assistant.current.responseKind = "commentary";
+              if (context.lastAssistant && context.lastAssistant.responseKind === undefined) {
+                context.lastAssistant.responseKind = "commentary";
+                yield* emitAssistant(context, true, context.lastAssistant);
+              }
               yield* completeAssistant(context);
+              context.lastAssistant = null;
               yield* completeReasoning(context);
               yield* handleToolUpdate(context, update);
               return;
             case "step-completed":
-            case "turn-ended":
               yield* completeAssistant(context);
               yield* completeReasoning(context);
               return;
+            case "turn-ended": {
+              const final = context.assistant.current ?? context.lastAssistant;
+              if (final) final.responseKind = "final";
+              if (context.assistant.current) yield* completeAssistant(context);
+              else if (final) yield* emitAssistant(context, true, final);
+              context.lastAssistant = null;
+              yield* completeReasoning(context);
+              return;
+            }
             case "shell-output-delta": {
               const shell = Array.from(context.tools.values())
                 .toReversed()
@@ -2429,6 +2448,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 current: null,
                 nextSegment: 0,
               },
+              lastAssistant: null,
               assistantReply: new CursorTransportFailure(),
               reasoning: {
                 current: null,
