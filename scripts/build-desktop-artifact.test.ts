@@ -28,6 +28,8 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
+  resolveDesktopBuildIconAssets,
+  resolveDesktopWebAssetBrand,
   DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -528,6 +530,12 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.isNull(preview.publish);
       assert.isNull(previewChannel.publish);
+      assert.equal(previewChannel.productName, "T3 Code (Nightly)");
+      assert.equal(resolveDesktopWebAssetBrand("0.0.41-preview.20260912.1589"), "nightly");
+      assert.deepStrictEqual(
+        resolveDesktopBuildIconAssets("0.0.41-preview.20260912.1589"),
+        resolveDesktopBuildIconAssets("0.0.41-nightly.20260912.1589"),
+      );
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
