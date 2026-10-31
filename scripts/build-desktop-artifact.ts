@@ -2873,7 +2873,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.dmg = {
       // Finder caches DMG backgrounds by volume name; give each installer its own.
       title: `${resolveDesktopProductName(version)} ${version} Installer`,
-      background: `dmg/dmg-background-${updateChannel}.png`,
+      background: `dmg/dmg-background-${resolveDesktopBrandChannel(version)}.png`,
       window: {
         width: 640,
         // DMG bounds include Finder's 32px title bar; keep that artwork strip clear.
