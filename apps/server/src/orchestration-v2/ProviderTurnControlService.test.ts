@@ -208,6 +208,7 @@ it.effect(
       const layerProjection = Layer.succeed(
         ProjectionStore.ProjectionStoreV2,
         ProjectionStore.ProjectionStoreV2.of({
+          getOfficePage: () => Effect.succeed({ threads: [], children: [], next: null }),
           apply: () => Effect.void,
           getLimitRecoveryCandidates: () => Effect.die("unused getLimitRecoveryCandidates"),
           getOpenRemoteDelegatedTasks: Effect.die("unused getOpenRemoteDelegatedTasks"),

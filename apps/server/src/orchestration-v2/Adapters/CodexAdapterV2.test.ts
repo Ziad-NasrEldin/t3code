@@ -6657,6 +6657,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
   it.effect.each([
     ["shutdown", "cancelled"],
+    ["explicit-close", "cancelled"],
+    ["close-after-completed", "completed"],
     ["activity-completed", "completed"],
     ["late-activity-completed", "completed"],
     ["stale-running", "completed"],
@@ -6682,7 +6684,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 item: {
                   type: "collabAgentToolCall",
                   id,
-                  tool: "listAgents",
+                  tool:
+                    nativeStatus === "explicit-close" || nativeStatus === "close-after-completed"
+                      ? "closeAgent"
+                      : "listAgents",
                   status: "completed",
                   senderThreadId: RESUME_NATIVE_THREAD,
                   receiverThreadIds: [RESUME_CHILD_THREAD],
@@ -6728,6 +6733,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
             });
+          } else if (nativeStatus === "close-after-completed") {
+            entries.push(
+              stateEntry("completed", "child-completed"),
+              stateEntry("shutdown", "explicit-close"),
+            );
           } else if (nativeStatus === "stale-running" || nativeStatus === "duplicate-completed") {
             entries.push(stateEntry("completed", "child-completed"), {
               ...stateEntry(
@@ -6737,7 +6747,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               afterMs: 100,
             });
           } else {
-            entries.push(stateEntry(nativeStatus, "status-update"));
+            entries.push(
+              stateEntry(
+                nativeStatus === "explicit-close" ? "shutdown" : nativeStatus,
+                "status-update",
+              ),
+            );
           }
           if (nativeStatus === "late-activity-completed") {
             entries.push({
@@ -6799,6 +6814,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* Deferred.await(marker);
           const latest = harness.subagentUpdates().at(-1)!.subagent;
           assert.equal(latest.status, expectedStatus);
+          assert.equal(
+            latest.closedAt != null,
+            nativeStatus === "explicit-close" || nativeStatus === "close-after-completed",
+          );
           if (nativeStatus === "duplicate-completed") {
             const first = harness.subagentUpdates().find((e) => e.subagent.status === "completed")!;
             assert.equal(

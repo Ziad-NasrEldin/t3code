@@ -466,6 +466,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["explicit", "automatic"]))),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -888,6 +889,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   updatedAt: Schema.DateTimeUtc,
+  /** Explicit release only; completion, interruption and provider unload are not closure. */
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /** Same as this subagent's previous record on this stream: its snapshot or `subagent.updated`. */
   promptOmitted: DedupedBodyMarker,
   resultOmitted: DedupedBodyMarker,
@@ -2088,6 +2091,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["explicit", "automatic"]))),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2285,6 +2289,7 @@ export type OrchestrationV2ExecutionNodeJson = typeof OrchestrationV2ExecutionNo
 
 export const OrchestrationV2SubagentJson = OrchestrationV2Subagent.mapFields((fields) => ({
   ...fields,
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   updatedAt: Schema.DateTimeUtcFromString,
@@ -3529,6 +3534,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   searchThreadStream: "orchestration.searchThreadStream",
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadFamily: "orchestration.getThreadFamily",
+  getOfficePage: "orchestration.getOfficePage",
   getWorktreeThreadIds: "orchestration.getWorktreeThreadIds",
   getOlderSettledThreads: "orchestration.getOlderSettledThreads",
   getThreadProjection: "orchestration.getThreadProjection",
@@ -4102,6 +4108,32 @@ export class OrchestrationV2SearchThreadError extends Schema.TaggedError<Orchest
   }
 }
 
+export const OrchestrationV2OfficeChild = Schema.Struct({
+  id: NodeId,
+  threadId: ThreadId,
+  childThreadId: Schema.NullOr(ThreadId),
+  remoteChild: OrchestrationV2Subagent.fields.remoteChild,
+  origin: OrchestrationV2Subagent.fields.origin,
+  status: OrchestrationV2Subagent.fields.status,
+  title: Schema.NullOr(Schema.String),
+  progress: Schema.optional(Schema.String),
+  result: Schema.NullOr(Schema.String),
+  closedAt: OrchestrationV2Subagent.fields.closedAt,
+  completedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+});
+export type OrchestrationV2OfficeChild = typeof OrchestrationV2OfficeChild.Type;
+export const OrchestrationV2OfficeChildJson = OrchestrationV2OfficeChild.mapFields((fields) => ({
+  ...fields,
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  completedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+}));
+export const OrchestrationV2OfficePage = Schema.Struct({
+  threads: Schema.Array(OrchestrationV2ThreadShell),
+  children: Schema.Array(OrchestrationV2OfficeChild),
+  next: Schema.NullOr(Schema.String),
+});
+export type OrchestrationV2OfficePage = typeof OrchestrationV2OfficePage.Type;
+
 export const OrchestrationV2RpcSchemas = {
   searchThread: {
     input: OrchestrationV2SearchThreadInput,
@@ -4122,6 +4154,10 @@ export const OrchestrationV2RpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationV2ArchivedShellSnapshot,
+  },
+  getOfficePage: {
+    input: Schema.Struct({ after: Schema.NullOr(Schema.String) }),
+    output: OrchestrationV2OfficePage,
   },
   getThreadFamily: {
     input: OrchestrationV2GetThreadFamilyInput,

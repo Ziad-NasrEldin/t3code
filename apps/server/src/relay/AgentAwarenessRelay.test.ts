@@ -184,6 +184,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
       Effect.sync(() => shellReads.push(threadId)).pipe(
         Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),
       ),
+    getOfficePage: () => Effect.succeed({ threads: [], children: [], next: null }),
     getShellSnapshot: () =>
       Effect.sync(() => {
         catchUp.shellSnapshotReads += 1;

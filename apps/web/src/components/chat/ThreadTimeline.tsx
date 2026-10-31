@@ -9,6 +9,8 @@ import {
   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
+import { LinkRequestCard } from "./LinkRequestCard";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { MessagesTimeline } from "./MessagesTimeline";
 
 /**
@@ -18,6 +20,8 @@ import { MessagesTimeline } from "./MessagesTimeline";
  * assistant text reaches only its own row, through useAssistantMessageText.
  */
 export function ThreadTimeline({
+  clean = false,
+  completedRunIds = [],
   threadDetailRef,
   entriesInput,
   draftEntries,
@@ -26,6 +30,8 @@ export function ThreadTimeline({
   detailLoading,
   ...timelineProps
 }: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
+  clean?: boolean;
+  completedRunIds?: ReadonlyArray<string>;
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
   threadDetailRef: ScopedThreadRef | null;
   entriesInput: Omit<TimelineEntriesInput, "visibleTurnItems">;
@@ -54,5 +60,67 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  if (!clean) return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  const completed = new Set(completedRunIds);
+  const lastResponses = new Map<string, string>();
+  for (const entry of displayedEntries) {
+    if (
+      entry.kind === "message" &&
+      entry.message.role === "assistant" &&
+      !entry.message.streaming &&
+      (entry.message.runId === null || completed.has(entry.message.runId))
+    )
+      lastResponses.set(entry.message.runId ?? entry.id, entry.id);
+  }
+  const transcript = displayedEntries.filter(
+    (entry) =>
+      entry.kind === "message" &&
+      (entry.message.role === "user" ||
+        (entry.message.role === "assistant" &&
+          lastResponses.get(entry.message.runId ?? entry.id) === entry.id)),
+  );
+  const requests = displayedEntries.filter(
+    (entry) =>
+      entry.kind === "event" &&
+      (entry.projectedItem.item.type === "secret_request" ||
+        entry.projectedItem.item.type === "link_request"),
+  );
+  return (
+    <>
+      {requests.length > 0 ? (
+        <section
+          aria-label="Operational requests"
+          className="flex max-h-52 min-h-0 shrink-0 flex-col border-b"
+        >
+          <p className="px-4 py-2 text-xs font-medium text-muted-foreground">
+            Requests and decisions
+          </p>
+          <div className="overflow-auto px-4 pb-3">
+            {threadDetailRef
+              ? requests.map((entry) => {
+                  if (entry.kind !== "event") return null;
+                  const { item, visibility } = entry.projectedItem;
+                  return item.type === "secret_request" ? (
+                    <SecretRequestCard
+                      key={entry.id}
+                      environmentId={threadDetailRef.environmentId}
+                      item={item}
+                      visibility={visibility}
+                    />
+                  ) : item.type === "link_request" ? (
+                    <LinkRequestCard
+                      key={entry.id}
+                      environmentId={threadDetailRef.environmentId}
+                      item={item}
+                      visibility={visibility}
+                    />
+                  ) : null;
+                })
+              : null}
+          </div>
+        </section>
+      ) : null}
+      <MessagesTimeline {...timelineProps} timelineEntries={transcript} />
+    </>
+  );
 }

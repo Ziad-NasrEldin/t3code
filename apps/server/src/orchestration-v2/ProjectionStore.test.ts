@@ -1043,6 +1043,7 @@ const subagentRecordsSelectById = Effect.gen(function* () {
         result: null,
         startedAt: now,
         completedAt: null,
+        closedAt: id === ids[0] ? now : null,
         updatedAt: now,
       },
     });
@@ -1054,6 +1055,70 @@ const subagentRecordsSelectById = Effect.gen(function* () {
   assert.deepEqual(yield* read(), ids);
   assert.deepEqual(yield* read([ids[1]!]), [ids[1]]);
   assert.deepEqual(yield* read([]), []);
+  const retained = yield* store.getThreadRecords(threadId, ["subagents"]);
+  assert.deepEqual(
+    retained.subagents.map((task) => task.closedAt),
+    [now, null],
+  );
+  for (let index = 0; index < 201; index++) {
+    const task = {
+      ...retained.subagents[0]!,
+      id: NodeId.make(`node:office-bulk:${String(index).padStart(3, "0")}`),
+      prompt: "Private prompt".repeat(1000),
+      result: "Result".repeat(1000),
+      closedAt: null,
+    };
+    yield* store.apply({
+      id: EventId.make(`event:${task.id}`),
+      type: "subagent.updated",
+      threadId,
+      nodeId: task.id,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: task,
+    });
+  }
+  const first = yield* store.getOfficePage(null);
+  assert.lengthOf(first.children, 200);
+  assert.isNotNull(first.next);
+  assert.isFalse(first.children.some((task) => "prompt" in task));
+  assert.isTrue(first.children.every((task) => (task.result?.length ?? 0) <= 240));
+  const second = yield* store.getOfficePage(first.next);
+  assert.lengthOf(second.children, 3);
+  assert.isNull(second.next);
+  assert.lengthOf(second.threads, 0);
+  assert.equal(new Set([...first.children, ...second.children].map((task) => task.id)).size, 203);
+  assert.deepEqual(
+    [...first.children, ...second.children].find((task) => task.id === ids[0])?.closedAt,
+    now,
+  );
+  const owner = yield* store.getThread(threadId);
+  const settledHistoryId = ThreadId.make("thread:office-unrelated-settled-history");
+  yield* store.apply({
+    id: EventId.make("event:office-unrelated-settled-history"),
+    type: "thread.created",
+    threadId: settledHistoryId,
+    occurredAt: now,
+    payload: {
+      ...owner,
+      id: settledHistoryId,
+      lineage: { rootThreadId: settledHistoryId, parentThreadId: null, relationshipToParent: null },
+      settledAt: now,
+      settledOverride: "settled",
+    },
+  });
+  yield* store.apply({
+    id: EventId.make("event:office-owner-archived"),
+    type: "thread.archived",
+    threadId,
+    occurredAt: now,
+    payload: { ...owner, archivedAt: now },
+  });
+  const archived = yield* store.getOfficePage(null);
+  assert.deepEqual(archived.threads.find((thread) => thread.id === threadId)?.archivedAt, now);
+  assert.isFalse(archived.threads.some((thread) => thread.id === settledHistoryId));
+  assert.lengthOf(archived.children, 200);
 });
 
 const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(function* (

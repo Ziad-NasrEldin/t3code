@@ -390,6 +390,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      cleanTranscript?: boolean;
       routeKind: "server";
       draftId?: never;
     }
@@ -399,6 +400,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      cleanTranscript?: boolean;
       routeKind: "draft";
       draftId: DraftId;
     };
@@ -413,6 +415,7 @@ export default function ChatView(props: ChatViewProps) {
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
+    cleanTranscript = false,
   } = props;
   const canOperateThread = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
   const canOperateTerminal = useEnvironmentScope(environmentId, AuthTerminalOperateScope);
@@ -3253,6 +3256,18 @@ export default function ChatView(props: ChatViewProps) {
             {...(threadFindEnabled ? { onFindInThread: openThreadFindStable } : {})}
           />
         </header>
+        {cleanTranscript ? (
+          <p className="shrink-0 border-b px-4 py-1.5 text-xs text-muted-foreground">
+            {activeThread?.modelSelection.model ?? "Model unavailable"} ·{" "}
+            {activeThread?.modelSelection.options?.find(
+              (option) => option.id === "reasoningEffort" || option.id === "effort",
+            )?.value ?? "Effort follows model settings"}{" "}
+            ·{" "}
+            {activeContextWindow
+              ? `${activeContextWindow.usedTokens.toLocaleString()} context tokens${activeContextWindow.maxTokens != null ? ` of ${activeContextWindow.maxTokens.toLocaleString()}` : " · capacity unavailable"}`
+              : "Context usage unavailable"}
+          </p>
+        ) : null}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas
@@ -3297,6 +3312,14 @@ export default function ChatView(props: ChatViewProps) {
               className="relative flex min-h-0 flex-1 flex-col bg-background"
             >
               <ThreadTimeline
+                clean={cleanTranscript}
+                completedRunIds={
+                  cleanTranscript
+                    ? (serverProjection?.runs ?? [])
+                        .filter((run) => run.status === "completed")
+                        .map((run) => run.id)
+                    : []
+                }
                 pendingApprovals={pendingApprovals}
                 heldApprovalRequestIds={heldApprovalRequestIds}
                 respondingRequestIds={respondingRequestIds}

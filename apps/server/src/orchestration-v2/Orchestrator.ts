@@ -136,6 +136,7 @@ import {
   emptyProjection,
   threadShellFromProjection,
   ProjectionStoreV2,
+  type ProjectionStoreV2Shape,
   type ProjectionRecordField,
   type ProjectionTimelinePage,
   type ProjectionTimelinePageOptions,
@@ -358,6 +359,7 @@ export interface OrchestratorV2Shape {
     readonly threadId: ThreadId;
     readonly itemId: TurnItemId;
   }) => Effect.Effect<OrchestrationV2TurnItem | null, OrchestratorV2Error>;
+  readonly getOfficePage: ProjectionStoreV2Shape["getOfficePage"];
   readonly getThreadRecords: <K extends ProjectionRecordField>(
     threadId: ThreadId,
     fields: ReadonlyArray<K>,
@@ -2941,6 +2943,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     >,
     events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
     effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+    automaticSettlement = false,
   ) {
     const thread = yield* projectionStore.getThread(command.threadId).pipe(
       Effect.mapError(
@@ -3363,6 +3366,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             thread.settledOverride === "settled" && thread.settledAt !== null && !wasPinned;
           return {
             ...thread,
+            settlementSource: automaticSettlement ? "automatic" : "explicit",
             settledOverride: "settled",
             settledAt: alreadySettled ? thread.settledAt : (command.settledAt ?? now),
             pullRequests: thread.pullRequests?.map((link) => withPullRequestWatch(link, undefined)),
@@ -3382,6 +3386,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           const alreadyPinnedActive = thread.settledOverride === "active";
           return {
             ...thread,
+            settlementSource: null,
             settledOverride: "active",
             settledAt: null,
             unsettledAt: alreadyPinnedActive ? (thread.unsettledAt ?? null) : now,
@@ -12690,6 +12695,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           },
           events,
           effects,
+          true,
         );
         break;
       }
@@ -13604,6 +13610,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           ),
         );
     }),
+    getOfficePage: projectionStore.getOfficePage,
     getThreadRecords: Effect.fn("OrchestratorV2.getThreadRecords")(
       function (threadId, fields, filter) {
         return projectionStore

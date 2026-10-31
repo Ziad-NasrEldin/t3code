@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/office": {
+      "types": "./src/state/office.ts",
+      "default": "./src/state/office.ts"
+    },
     "./zip/bounded-zip": {
       "types": "./src/zip/boundedZip.ts",
       "default": "./src/zip/boundedZip.ts"

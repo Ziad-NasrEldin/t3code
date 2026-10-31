@@ -2463,6 +2463,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             readonly completedAt?: DateTime.Utc | null;
             readonly startedAt?: DateTime.Utc;
             readonly reopen?: boolean;
+            readonly explicitlyClosed?: boolean;
           }) {
             const now = yield* DateTime.now;
             const prior = input.subagent.task;
@@ -2482,6 +2483,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     parentNodeId: input.subagent.parentContext.itemParentNodeId,
                   }
                 : {}),
+              ...(input.explicitlyClosed
+                ? { closedAt: now }
+                : input.reopen
+                  ? { closedAt: null }
+                  : {}),
               startedAt: input.startedAt ?? prior.startedAt,
               result: input.result === undefined ? input.subagent.task.result : input.result,
               completedAt,
@@ -3125,6 +3131,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* emitSubagentTaskUpdate({
                 subagent,
                 status,
+                explicitlyClosed:
+                  input.item.tool === "closeAgent" &&
+                  input.item.status === "completed" &&
+                  state.status === "shutdown",
                 ...(state.message === null ? {} : { result: state.message }),
               });
             }

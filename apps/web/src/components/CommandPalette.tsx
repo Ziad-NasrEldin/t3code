@@ -1522,6 +1522,16 @@ function OpenCommandPaletteDialog(props: {
 
   actionItems.push({
     kind: "action",
+    value: "action:office",
+    searchTerms: ["office", "agents", "signal crew", "floor"],
+    title: "Open agent office",
+    icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    run: async () => {
+      await navigate({ to: "/office" });
+    },
+  });
+  actionItems.push({
+    kind: "action",
     value: "action:settings",
     searchTerms: ["settings", "preferences", "configuration", "keybindings"],
     title: "Open settings",

@@ -1743,6 +1743,12 @@ const WsOrchestrationV2GetArchivedShellSnapshotRpc = Rpc.make(
   },
 );
 
+const WsOrchestrationV2GetOfficePageRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getOfficePage, {
+  payload: OrchestrationV2RpcSchemas.getOfficePage.input,
+  success: OrchestrationV2RpcSchemas.getOfficePage.output,
+  error: Schema.Union([OrchestrationV2GetShellSnapshotError, EnvironmentAuthorizationError]),
+});
+
 const WsOrchestrationV2GetThreadFamilyRpc = Rpc.make(ORCHESTRATION_V2_WS_METHODS.getThreadFamily, {
   payload: OrchestrationV2RpcSchemas.getThreadFamily.input,
   success: OrchestrationV2RpcSchemas.getThreadFamily.output,
@@ -2150,6 +2156,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationV2SearchThreadStreamRpc,
   WsOrchestrationV2GetArchivedShellSnapshotRpc,
   WsOrchestrationV2GetThreadFamilyRpc,
+  WsOrchestrationV2GetOfficePageRpc,
   WsOrchestrationV2GetWorktreeThreadIdsRpc,
   WsOrchestrationV2GetOlderSettledThreadsRpc,
   WsOrchestrationV2GetThreadProjectionRpc,

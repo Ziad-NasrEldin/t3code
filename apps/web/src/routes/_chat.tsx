@@ -1,6 +1,11 @@
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { Outlet, createFileRoute, redirect, useMatches } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { OfficeChatContext } from "../components/office/OfficeChatContext";
+import { useNativeTitlebarHeight } from "../lib/windowControlsOverlay";
+import { Button } from "../components/ui/button";
+import { XIcon } from "lucide-react";
 
 import { ThreadRouteView } from "../components/ThreadRouteView";
 import { isAppModalPage } from "../components/sidebar/mainAppLocation";
@@ -27,21 +32,101 @@ function ChatRouteLayout() {
   if (!modalOpen && threadRouteTargetKey(backgroundTarget) !== threadRouteTargetKey(threadTarget)) {
     setBackgroundTarget(threadTarget);
   }
-  const shownTarget = modalOpen ? backgroundTarget : threadTarget;
+  const officeOpen = useMatches({
+    select: (matches) => matches.some((match) => match.pathname === "/office"),
+  });
+  const [officeTarget, setOfficeTarget] = useState<ScopedThreadRef | null>(null);
+  if (!officeOpen && officeTarget !== null) setOfficeTarget(null);
+  const officeChatOpen = officeOpen && officeTarget !== null;
+  const shownTarget: ThreadRouteTarget | null = officeChatOpen
+    ? { kind: "server", threadRef: officeTarget }
+    : modalOpen
+      ? backgroundTarget
+      : threadTarget;
+  const nativeTitlebarHeight = useNativeTitlebarHeight();
+  const chatHost = useRef<HTMLDivElement>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- traps keyboard focus in the shared mounted chat host and restores its triggering office control
+  useEffect(() => {
+    if (!officeChatOpen) return;
+    const previous = document.activeElement;
+    const root = chatHost.current;
+    if (!root) return;
+    const focusable = () =>
+      [
+        ...root.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input, textarea, [tabindex="0"], [contenteditable="true"]',
+        ),
+      ].filter((element) => element.getClientRects().length > 0);
+    focusable()[0]?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.preventDefault();
+        setOfficeTarget(null);
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusable();
+      const first = elements[0],
+        last = elements.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    root.addEventListener("keydown", onKey);
+    return () => {
+      root.removeEventListener("keydown", onKey);
+      if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [officeChatOpen]);
   return (
-    <>
-      {shownTarget?.kind === "server" && !modalOpen ? (
-        <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
-      ) : null}
-      {shownTarget ? (
-        <ThreadRouteView target={shownTarget} background={modalOpen} />
-      ) : modalOpen ? (
-        <SidebarInset className="h-dvh" />
-      ) : (
-        <Outlet />
-      )}
+    <OfficeChatContext
+      value={{ open: setOfficeTarget, close: () => setOfficeTarget(null), isOpen: officeChatOpen }}
+    >
+      <div
+        ref={chatHost}
+        style={officeChatOpen ? { top: Math.max(32, nativeTitlebarHeight + 8) } : undefined}
+        role={officeChatOpen ? "dialog" : undefined}
+        aria-modal={officeChatOpen || undefined}
+        aria-label={officeChatOpen ? "Office chat" : undefined}
+        className={
+          officeChatOpen
+            ? "fixed inset-x-3 bottom-3 top-[max(2rem,var(--native-titlebar-height,0px))] z-50 mx-auto flex max-w-4xl flex-col overflow-hidden rounded-2xl bg-background shadow-2xl sm:inset-x-12 sm:bottom-10 sm:top-[max(3rem,var(--native-titlebar-height,0px))]"
+            : "contents"
+        }
+      >
+        {officeChatOpen ? (
+          <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
+            <span className="text-sm font-medium">Chat · user messages and final responses</span>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label="Close office chat"
+              onClick={() => setOfficeTarget(null)}
+            >
+              <XIcon />
+            </Button>
+          </div>
+        ) : null}
+        {shownTarget?.kind === "server" && !modalOpen ? (
+          <ThreadLinkPrompt threadRef={shownTarget.threadRef} />
+        ) : null}
+        {shownTarget ? (
+          <ThreadRouteView
+            target={shownTarget}
+            background={modalOpen && !officeChatOpen}
+            office={officeChatOpen}
+          />
+        ) : modalOpen ? (
+          <SidebarInset className="h-dvh" />
+        ) : (
+          <Outlet />
+        )}
+      </div>
       {modalOpen ? <Outlet /> : null}
-    </>
+    </OfficeChatContext>
   );
 }
 
