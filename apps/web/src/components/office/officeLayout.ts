@@ -8,7 +8,7 @@ export interface RoomSite {
   readonly side: "north" | "east" | "south" | "west";
 }
 // Each module has two clear berths. More occupants get another site on this same floor.
-export const MODULE_BERTHS = 2;
+const MODULE_BERTHS = 2;
 export function projectRoomKey(projectId: string, slot: number): string {
   const module = Math.floor(slot / MODULE_BERTHS);
   return module === 0 ? projectId : `extension:${projectId}:${module}`;
@@ -106,7 +106,7 @@ export function homeLocal(variant: RoomVariant, slot: number): Point {
     ? [-2.5, variant === "prism" ? 4.3125 : 3.75]
     : [3, variant === "grove" ? 4.125 : 3.5];
 }
-export function roomDoor(site: RoomSite): Point {
+function roomDoor(site: RoomSite): Point {
   const [x, z] = ringSize(site.ring);
   if (site.side === "north") return [site.x, -z];
   if (site.side === "south") return [site.x, z];
