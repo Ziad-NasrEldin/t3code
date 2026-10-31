@@ -7,6 +7,8 @@ import {
   OrthographicCamera,
   Vector3,
   LoopRepeat,
+  Texture,
+  type WebGLRenderer,
   type Camera,
 } from "three";
 import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
@@ -235,6 +237,25 @@ export function disposeOfficeAssets() {
   for (const geometry of geometries) geometry.dispose();
   for (const material of materials) material.dispose();
   loadedAssets.clear();
+}
+export function collectOfficeTextures(
+  root: Object3D,
+  renderer: WebGLRenderer,
+  textures: Set<Texture>,
+) {
+  root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+      for (const value of Object.values(material))
+        if (value instanceof Texture) textures.add(value);
+      // Three's shared DFG lookup also registers a listener retaining each uploading renderer.
+      const properties = renderer.properties.get(material) as {
+        uniforms?: Record<string, { value: unknown }>;
+      };
+      for (const uniform of Object.values(properties.uniforms ?? {}))
+        if (uniform.value instanceof Texture) textures.add(uniform.value);
+    }
+  });
 }
 export function createFurnitureInstance(asset: GLTF) {
   const root = clone(asset.scene),

@@ -1,6 +1,22 @@
-import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Group, Mesh, Object3D, Vector3, ACESFilmicToneMapping, SRGBColorSpace } from "three";
+import { Canvas, unmountComponentAtNode, useFrame, useLoader, useThree } from "@react-three/fiber";
+import {
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type RefObject,
+} from "react";
+import {
+  Group,
+  Mesh,
+  Object3D,
+  Vector3,
+  ACESFilmicToneMapping,
+  SRGBColorSpace,
+  type Texture,
+} from "three";
 import { GLTFLoader, type GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -24,6 +40,7 @@ import {
   markPerformanceReady,
   rememberOfficeAsset,
   disposeOfficeAssets,
+  collectOfficeTextures,
   createFurnitureInstance,
   updateFurniture,
   updateCupHome,
@@ -410,11 +427,25 @@ function ActorModel({
     </>
   );
 }
-function CameraController({ focus }: { focus: OfficeFocus }) {
+function CameraController({
+  focus,
+  controlsRef,
+}: {
+  focus: OfficeFocus;
+  controlsRef: RefObject<OrbitControls | null>;
+}) {
   const { camera, gl, invalidate, size } = useThree();
-  const [controls] = useState(() => new OrbitControls(camera, gl.domElement));
+  const [controls] = useState(() => new OrbitControls(camera));
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- connects orbit controls to the canvas and invalidates demand frames only for actual camera input
-  useEffect(() => connectOfficeControls(controls, () => invalidate()), [controls, invalidate]);
+  useEffect(() => {
+    controls.connect(gl.domElement);
+    controlsRef.current = controls;
+    const disconnect = connectOfficeControls(controls, () => invalidate());
+    return () => {
+      disconnect();
+      if (controlsRef.current === controls) controlsRef.current = null;
+    };
+  }, [controls, controlsRef, gl, invalidate]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- applies explicit directory and toolbar camera focus to Three's imperative camera
   useEffect(
     () => focusOfficeCamera(camera, controls, focus, size, () => invalidate()),
@@ -439,8 +470,25 @@ function Scene({
   onAmenity,
   onMetrics,
   onVisible,
-}: SceneProps) {
-  const { invalidate, gl } = useThree();
+  controlsRef,
+}: SceneProps & { controlsRef: RefObject<OrbitControls | null> }) {
+  const { invalidate, gl, scene } = useThree();
+  const [textures] = useState(() => new Set<Texture>());
+  const textureCount = useRef(-1);
+  useFrame(() => {
+    if (textureCount.current === gl.info.memory.textures) return;
+    textureCount.current = gl.info.memory.textures;
+    collectOfficeTextures(scene, gl, textures);
+  });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases uploaded maps and Three's shared lookup listeners even after removed materials lose their renderer uniforms
+  useEffect(
+    () => () => {
+      textureCount.current = -1;
+      for (const texture of textures) texture.dispose();
+      textures.clear();
+    },
+    [textures],
+  );
   const lives = useSyncExternalStore(motion.subscribe, motion.getSnapshot, motion.getSnapshot);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- lets newly mounted DOM anchors request one projection frame from the demand renderer
   useEffect(() => motion.connectGraphics(() => invalidate()), [motion, invalidate]);
@@ -541,7 +589,7 @@ function Scene({
       <hemisphereLight args={["#e5f5ff", "#8c765d", 2.3]} />
       <directionalLight position={[-15, 35, 18]} color={OFFICE_COLORS.key} intensity={3} />
       <directionalLight position={[22, 24, 3]} color={OFFICE_COLORS.fill} intensity={2} />
-      <CameraController focus={focus} />
+      <CameraController focus={focus} controlsRef={controlsRef} />
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.68, 0]}>
         <planeGeometry args={[400 + maxRing * 40, 400 + maxRing * 40]} />
         <meshStandardMaterial color={OFFICE_COLORS.ground} roughness={1} />
@@ -594,6 +642,9 @@ function AssetLifetime() {
 export function OfficeScene(props: SceneProps) {
   const [retry, setRetry] = useState(0),
     [lost, setLost] = useState(false);
+  const controlsRef = useRef<OrbitControls | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- disconnects document input before Canvas detaches; later Three cleanup would resolve its root to the detached canvas
+  useLayoutEffect(() => () => controlsRef.current?.dispose(), []);
   return (
     <RenderErrorBoundary
       resetKeys={[retry]}
@@ -629,6 +680,9 @@ export function OfficeScene(props: SceneProps) {
         </div>
       ) : null}
       <Canvas
+        ref={(canvas) => {
+          if (canvas) return () => unmountComponentAtNode(canvas);
+        }}
         key={retry}
         orthographic
         frameloop={props.visible && !lost ? "demand" : "never"}
@@ -652,7 +706,7 @@ export function OfficeScene(props: SceneProps) {
       >
         <AssetLifetime />
         <Suspense fallback={null}>
-          <Scene {...props} />
+          <Scene {...props} controlsRef={controlsRef} />
         </Suspense>
       </Canvas>
     </RenderErrorBoundary>
