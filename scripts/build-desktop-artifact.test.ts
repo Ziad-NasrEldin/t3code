@@ -531,6 +531,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.isNull(preview.publish);
       assert.isNull(previewChannel.publish);
       assert.equal(previewChannel.productName, "T3 Code (Nightly)");
+      assert.nestedPropertyVal(previewChannel, "mac.identity", "-");
       assert.nestedPropertyVal(previewChannel, "dmg.background", "dmg/dmg-background-nightly.png");
       assert.nestedPropertyVal(release, "dmg.background", "dmg/dmg-background-latest.png");
       assert.equal(resolveDesktopWebAssetBrand("0.0.41-preview.20260912.1589"), "nightly");
