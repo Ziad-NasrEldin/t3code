@@ -279,6 +279,9 @@ export class CorridorTraffic {
     this.preparing = null;
     const intervals = result.value;
     if (!intervals) return false;
+    // A scan may span frames, during which a new physical holder can appear
+    // on a segment already scanned. Recheck before making a durable booking.
+    if (plan.segments.some((segment) => occupied(segment.start, segment.end))) return false;
     intervals.sort((a, b) => a[0] - b[0]);
     let departure = this.now;
     for (const [begin, finish] of intervals)

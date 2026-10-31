@@ -480,6 +480,16 @@ it("drains conflicting traffic in ticket order without letting a new convoy star
   expect(crossing.claim("held", () => true)).toBe(false);
   crossing.beginFrame();
   expect(crossing.claim("held", () => false)).toBe(true);
+
+  // A new stationary occupant can arrive while a long scan is suspended.
+  const arrivals = new CorridorTraffic();
+  const route = Array.from({ length: 2100 }, (_, i) => new Vector3(i + 1, 0.07, 0));
+  arrivals.plan("long-scan", new Vector3(0, 0.07, 0), route);
+  arrivals.beginFrame();
+  expect(arrivals.claim("long-scan", () => false)).toBe(false);
+  arrivals.beginFrame();
+  expect(arrivals.claim("long-scan", (start) => start.x === 0)).toBe(false);
+  expect(arrivals.reserved("long-scan")).toBe(false);
 });
 it("replaces a remote rest journey at a cleared node when new work arrives", () => {
   const motion = new OfficeMotion();
