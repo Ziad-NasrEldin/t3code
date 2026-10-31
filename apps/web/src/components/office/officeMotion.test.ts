@@ -345,6 +345,7 @@ it("reserves actual rig bounds for the 12-project 60-occupant single-floor fixtu
   const result = tickCrowd(motion, lives, 1800, (step) => {
     if (child.performance === "sofa") sofaAt = Math.min(sofaAt, step / 10);
   });
+  expect(result.seconds).toBeLessThan(900);
   expect(result.performed).toContain(`${child.key}:sofa`);
   expect(sofaAt).toBeLessThan(180);
   expect(result.overlap).toBe("");
@@ -385,6 +386,7 @@ it("reserves actual rig bounds for the 12-project 60-occupant single-floor fixtu
       recovery = true;
     }
   });
+  expect(returning.seconds).toBeLessThan(1400);
   expect(recovery).toBe(true);
   expect(returning.performed).toContain(`${child.key}:game`);
   expect(returning.overlap).toBe("");

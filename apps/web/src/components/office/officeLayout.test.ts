@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { allocateStable, ringSize, ringSites, siteAt, routeToLobby } from "./officeLayout";
+import {
+  allocateStable,
+  ringSize,
+  ringSites,
+  siteAt,
+  routeToLobby,
+  routeBetweenSites,
+} from "./officeLayout";
 describe("stable concentric offices", () => {
   it("keeps occupied sites, reuses vacancies and extends through further rings", () => {
     const keys = Array.from({ length: 150 }, (_, i) => `project-${i}`),
@@ -26,6 +33,11 @@ describe("stable concentric offices", () => {
     }
   });
   it("never routes through a project room, including when inner rooms are removed", () => {
+    // The reverse local journey on a clear north side used to circle the ring.
+    expect(routeBetweenSites(siteAt(6), siteAt(4))).toEqual([
+      [0, -26.5],
+      [-14, -26.5],
+    ]);
     for (const id of [0, 1, 2, 3, 4, 15, 80]) {
       const site = siteAt(id),
         route = routeToLobby(site);

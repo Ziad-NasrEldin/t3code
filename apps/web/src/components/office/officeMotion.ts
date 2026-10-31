@@ -357,8 +357,9 @@ export class OfficeMotion {
         existing.site.index === site.index &&
         existing.variant === variant &&
         this.slots.get(actor.key) === slot &&
-        existing.restSite?.index === restBerth.site?.index &&
-        existing.restSlot === restBerth.slot
+        (actor.child ||
+          (existing.restSite?.index === restBerth.site?.index &&
+            existing.restSlot === restBerth.slot))
       )
         return existing;
       // Reconciliation can skip the absent snapshot of a completed departure. Its old
@@ -455,7 +456,7 @@ export class OfficeMotion {
   }
   private occupiedLobbyPoints(life: Life): ReadonlyArray<Point> {
     return [...this.lives.values()]
-      .filter((other) => other !== life && other.restSite === null)
+      .filter((other) => other !== life && !other.actor.child && other.restSite === null)
       .map((other) => [other.rest.x, other.rest.z] as Point);
   }
   private homeRoute(life: Life) {

@@ -14,7 +14,9 @@ export function projectRoomKey(projectId: string, slot: number): string {
   return module === 0 ? projectId : `extension:${projectId}:${module}`;
 }
 export function restAreaKey(slot: number): string | null {
-  return slot < 1 ? null : `common:${Math.floor((slot - 1) / MODULE_BERTHS)}`;
+  return !Number.isSafeInteger(slot) || slot < 1
+    ? null
+    : `common:${Math.floor((slot - 1) / MODULE_BERTHS)}`;
 }
 export function ringSize(ring: number): Point {
   // The fixed lobby rooms need the same 7.5-unit door setback as the outer modules.
@@ -114,8 +116,13 @@ export function roomDoor(site: RoomSite): Point {
 function aroundRing(ring: number, start: Point, end: Point): Point[] {
   const [x, z] = ringSize(ring),
     perimeter = 4 * (x + z);
-  const linkZ = ring ? ringSize(ring - 1)[1] : 0;
-  if ([start, end].every((p) => p[0] === x && p[1] >= linkZ && p[1] <= z)) return [start, end];
+  // A clear side has no junction between these points. A local reversal must
+  // not force a complete circuit; whole-journey admission drains opposing use.
+  if (
+    (start[0] === end[0] && Math.abs(start[0]) === x) ||
+    (start[1] === end[1] && Math.abs(start[1]) === z)
+  )
+    return [start, end];
   const at = (p: Point) =>
     Math.abs(p[1] + z) < 0.001
       ? p[0] + x

@@ -48,6 +48,7 @@ it("keeps every crowded occupant in horizontal project modules and connected res
         (room) => room.id === projectRoomKey(actor.projectId, world.slots[actor.key]!),
       ),
     ).toBe(true);
+    if (actor.child) expect(world.rests[actor.key]).toBeUndefined();
     const rest = restAreaKey(world.rests[actor.key]!);
     if (rest)
       expect(world.rooms.some((room) => room.id === rest && room.projectId === null)).toBe(true);

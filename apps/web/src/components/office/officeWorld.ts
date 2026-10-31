@@ -83,7 +83,7 @@ export function reconcileWorld(
   }
   const rests = allocateStable(
     world.rests,
-    entries.map(({ actor }) => actor.key),
+    entries.filter(({ actor }) => !actor.child).map(({ actor }) => actor.key),
   );
   const wanted = new Map<string, { projectId: string | null; title: string }>();
   // Allocate all primary anchors first; previously occupied module sites always take precedence.
@@ -96,7 +96,7 @@ export function reconcileWorld(
         projectId: actor.projectId,
         title: `${titles.get(actor.projectId) ?? "Project"} · extension ${Math.floor(slots[actor.key]! / 2)}`,
       });
-    const rest = restAreaKey(rests[actor.key]!);
+    const rest = actor.child ? null : restAreaKey(rests[actor.key]!);
     if (rest)
       wanted.set(rest, {
         projectId: null,
