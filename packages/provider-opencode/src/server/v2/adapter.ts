@@ -710,7 +710,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
     const threads = new Map<string, ThreadState>();
     const childOwners = new Map<string, ThreadState>();
-    const announced = new Map<string, EventOf<"session.created">["data"]>();
+    const announced = new Map<
+      string,
+      EventOf<"session.created">["data"] & { readonly closedAt?: DateTime.Utc }
+    >();
     const strays = new Map<string, ThreadState>();
     const busy = new Set<string>();
     const pending = new Map<RuntimeRequestId, PendingRequest>();
@@ -1372,6 +1375,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       child.directory = call.state.directory;
       child.agent = info?.agent ?? call.agent ?? child.agent;
       child.rules = info?.permissions ?? child.rules;
+      if (info?.parentID === call.state.sessionId && info.closedAt !== undefined)
+        child.closedAt ??= info.closedAt;
       threads.set(childId, child);
       childOwners.set(childId, rootOf(call.state));
       call.child = child;
@@ -2286,6 +2291,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
       const sessionId = sessionOfEvent(event);
       if (event.type === "session.deleted") {
+        const info = announced.get(event.data.sessionID);
+        if (info !== undefined && info.closedAt === undefined)
+          announced.set(event.data.sessionID, { ...info, closedAt: yield* DateTime.now });
         const deleted = threads.get(event.data.sessionID);
         if (deleted?.subagent) {
           deleted.closedAt ??= yield* DateTime.now;
@@ -2335,7 +2343,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const owner = ownerOf(event.data.parentID);
         if (owner !== undefined) {
           childOwners.set(event.data.sessionID, owner);
-          announced.set(event.data.sessionID, event.data);
+          const previous = announced.get(event.data.sessionID);
+          announced.set(event.data.sessionID, {
+            ...event.data,
+            ...(previous?.parentID === event.data.parentID && previous?.closedAt !== undefined
+              ? { closedAt: previous.closedAt }
+              : {}),
+          });
           holderOf(event.data.parentID)?.wakes.at(-1)?.children.add(event.data.sessionID);
         }
         return;
@@ -3843,6 +3857,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         for (const [child, owner] of childOwners) {
           if (owner !== state) continue;
           childOwners.delete(child);
+          announced.delete(child);
           threads.delete(child);
         }
         if (state.mcp !== undefined) yield* removeMcp(state.mcp);

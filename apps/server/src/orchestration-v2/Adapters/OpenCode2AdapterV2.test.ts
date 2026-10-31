@@ -808,6 +808,71 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     },
   });
   const CHILD = "ses_f1485c529ffea4URrYruwEg0Ja";
+  it.effect.each([
+    ["early deletion", true],
+    ["duplicate announcement", true],
+    ["duplicate deletion", true],
+    ["unrelated deletion", false],
+    ["deletion before ownership", false],
+    ["parent deletion", false],
+  ] as const)("preserves attributable child closure across %s", ([ordering, closed]) =>
+    Effect.gen(function* () {
+      const launch = backgroundLaunch(CHILD);
+      const announcement = launch[launch.length - 2]!;
+      const progress = launch[launch.length - 1]!;
+      const deletedSession =
+        ordering === "parent deletion"
+          ? SESSION
+          : ordering === "unrelated deletion"
+            ? "ses_f1485c529ffea4URrYruwEg0Jb"
+            : CHILD;
+      const deletion: ProviderReplayEntry = {
+        type: "emit_inbound",
+        frame: {
+          type: "sdk.event",
+          event: {
+            id: "evt_sessiondeleted0000",
+            created: 1,
+            type: "session.deleted",
+            data: { sessionID: deletedSession },
+            durable: { aggregateID: deletedSession, seq: 1, version: 2 },
+          },
+        },
+      };
+      const { runtime, thread } = yield* resumed([
+        ...launch.slice(0, -2),
+        ...(ordering === "deletion before ownership"
+          ? [deletion, announcement]
+          : [announcement, deletion]),
+        ...(ordering === "duplicate announcement" ? [announcement] : []),
+        ...(ordering === "duplicate deletion" ? [deletion] : []),
+        progress,
+        progress,
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const tasks: Array<
+        Extract<ProviderAdapter.ProviderAdapterV2Event, { type: "subagent.updated" }>["subagent"]
+      > = [];
+      const terminal = yield* runtime.events.pipe(
+        Stream.tap((entry) =>
+          Effect.sync(() => {
+            if (entry.type === "subagent.updated") tasks.push(entry.subagent);
+          }),
+        ),
+        Stream.filter((entry) => entry.type === "turn.terminal"),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(withLineage(thread));
+      yield* Fiber.join(terminal);
+      const attached = tasks.filter((task) => task.childThreadId !== null);
+      assert.isNotEmpty(attached);
+      for (const task of attached) {
+        assert.equal(task.closedAt !== undefined, closed);
+        assert.equal(task.status, "running");
+      }
+    }).pipe(Effect.scoped),
+  );
   const watchBackgroundTurn = (runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime) =>
     Effect.gen(function* () {
       const attached = yield* Deferred.make<void>();
