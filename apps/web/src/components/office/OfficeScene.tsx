@@ -645,12 +645,54 @@ function AssetLifetime() {
   );
   return null;
 }
+function OfficeCanvas({
+  lost,
+  onLost,
+  ...props
+}: SceneProps & { lost: boolean; onLost: () => void }) {
+  const controlsRef = useRef<OrbitControls | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- disconnects camera input while the canvas still belongs to its document on every graphics replacement
+  useLayoutEffect(
+    () => () => {
+      controlsRef.current?.dispose();
+      if (canvasRef.current) unmountComponentAtNode(canvasRef.current);
+    },
+    [],
+  );
+  return (
+    <Canvas
+      ref={canvasRef}
+      orthographic
+      frameloop={props.visible && !lost ? "demand" : "never"}
+      dpr={props.lowQuality ? 1 : [1, 1.25]}
+      camera={{ position: [25, 49, 40], near: 0.1, far: 2500 }}
+      gl={{ antialias: !props.lowQuality, powerPreference: "low-power", alpha: false }}
+      fallback={<p>Use the directory to open and control agents. WebGL is unavailable.</p>}
+      onCreated={({ gl }) => {
+        gl.toneMapping = ACESFilmicToneMapping;
+        gl.toneMappingExposure = 1.25;
+        gl.outputColorSpace = SRGBColorSpace;
+        gl.domElement.addEventListener(
+          "webglcontextlost",
+          (event) => {
+            event.preventDefault();
+            onLost();
+          },
+          { once: true },
+        );
+      }}
+    >
+      <AssetLifetime />
+      <Suspense fallback={null}>
+        <Scene {...props} controlsRef={controlsRef} />
+      </Suspense>
+    </Canvas>
+  );
+}
 export function OfficeScene(props: SceneProps) {
   const [retry, setRetry] = useState(0),
     [lost, setLost] = useState(false);
-  const controlsRef = useRef<OrbitControls | null>(null);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- disconnects document input before Canvas detaches; later Three cleanup would resolve its root to the detached canvas
-  useLayoutEffect(() => () => controlsRef.current?.dispose(), []);
   return (
     <RenderErrorBoundary
       resetKeys={[retry]}
@@ -685,36 +727,7 @@ export function OfficeScene(props: SceneProps) {
           </Button>
         </div>
       ) : null}
-      <Canvas
-        ref={(canvas) => {
-          if (canvas) return () => unmountComponentAtNode(canvas);
-        }}
-        key={retry}
-        orthographic
-        frameloop={props.visible && !lost ? "demand" : "never"}
-        dpr={props.lowQuality ? 1 : [1, 1.25]}
-        camera={{ position: [25, 49, 40], near: 0.1, far: 2500 }}
-        gl={{ antialias: !props.lowQuality, powerPreference: "low-power", alpha: false }}
-        fallback={<p>Use the directory to open and control agents. WebGL is unavailable.</p>}
-        onCreated={({ gl }) => {
-          gl.toneMapping = ACESFilmicToneMapping;
-          gl.toneMappingExposure = 1.25;
-          gl.outputColorSpace = SRGBColorSpace;
-          gl.domElement.addEventListener(
-            "webglcontextlost",
-            (event) => {
-              event.preventDefault();
-              setLost(true);
-            },
-            { once: true },
-          );
-        }}
-      >
-        <AssetLifetime />
-        <Suspense fallback={null}>
-          <Scene {...props} controlsRef={controlsRef} />
-        </Suspense>
-      </Canvas>
+      <OfficeCanvas key={retry} {...props} lost={lost} onLost={() => setLost(true)} />
     </RenderErrorBoundary>
   );
 }
