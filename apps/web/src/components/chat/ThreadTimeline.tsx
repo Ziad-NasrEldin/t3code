@@ -60,7 +60,6 @@ export function ThreadTimeline({
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
   if (!clean) return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
-  const transcript = cleanTranscript(displayedEntries);
   const requests = displayedEntries.filter(
     (entry) =>
       entry.kind === "event" &&
@@ -108,7 +107,11 @@ export function ThreadTimeline({
           </div>
         </section>
       ) : null}
-      <MessagesTimeline {...timelineProps} timelineEntries={transcript} />
+      <MessagesTimeline
+        {...timelineProps}
+        clean
+        timelineEntries={cleanTranscript(displayedEntries)}
+      />
     </>
   );
 }

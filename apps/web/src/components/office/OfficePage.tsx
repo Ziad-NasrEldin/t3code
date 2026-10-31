@@ -359,7 +359,7 @@ function OfficeFloor({
     data.actors,
     titles,
     data.online,
-    !data.loading && !data.failed,
+    data.ready,
     motion,
     visible && !chat.isOpen,
   );
@@ -414,6 +414,14 @@ function OfficeFloor({
     if (key === "directory") {
       setDirectory(true);
       directoryRef.current?.focus();
+      return;
+    }
+    if (!data.online || !data.ready) {
+      setNotice(
+        data.online
+          ? "Waiting for this environment's current inventory before starting a visit."
+          : "Reconnect this environment before starting a visit.",
+      );
       return;
     }
     if (reduced) {
@@ -537,7 +545,7 @@ function OfficeFloor({
                 hidden
               >
                 <Button
-                  variant="secondary"
+                  variant="media-close"
                   size="xs"
                   className="max-w-52"
                   onClick={() => setSelected(entry.key)}
@@ -563,7 +571,7 @@ function OfficeFloor({
                 {entry.key === selected && actor ? (
                   <ActorActions
                     actor={actor}
-                    online={data.online}
+                    online={data.online && data.ready}
                     onDismiss={() => setSelected(null)}
                   />
                 ) : null}
@@ -590,7 +598,7 @@ function OfficeFloor({
               >
                 <Button
                   size="xs"
-                  variant="secondary"
+                  variant="media-close"
                   onClick={() =>
                     setFocus({
                       x: room.site.x,
@@ -601,7 +609,7 @@ function OfficeFloor({
                   }
                 >
                   <span className="truncate">{room.title}</span>
-                  <span className="text-2xs text-muted-foreground">
+                  <span className="text-2xs">
                     {room.projectId === null
                       ? "Rest terrace"
                       : data.actors.filter(
@@ -662,11 +670,6 @@ function OfficeFloor({
           {metrics} · rendering {prefs.quality === "low" ? "8" : "16"} meshes at most · pan / scroll
           to zoom
         </p>
-        {data.loading && world.actors.length === 0 ? (
-          <p role="status" className="absolute inset-x-4 top-20 text-center text-sm text-white">
-            Loading retained agents from this environment…
-          </p>
-        ) : null}
         {!data.online ? (
           <div
             role="status"
@@ -680,7 +683,22 @@ function OfficeFloor({
             </Button>
           </div>
         ) : null}
-        {data.online && !data.loading && data.actors.length === 0 ? (
+        {data.online && !data.ready ? (
+          <div
+            role="status"
+            className="absolute inset-x-4 top-20 rounded-lg bg-background p-3 text-sm"
+          >
+            {data.failed
+              ? "Inventory could not be refreshed. Last known occupants are retained; thread actions are paused."
+              : data.actors.length === 0
+                ? "Loading retained agents from this environment…"
+                : "Synchronizing retained inventory. Last known occupants stay visible until the current inventory is ready."}{" "}
+            <Button size="sm" variant="outline" onClick={data.refresh}>
+              Retry inventory
+            </Button>
+          </div>
+        ) : null}
+        {data.online && data.ready && data.actors.length === 0 ? (
           <div className="absolute inset-x-4 top-1/3 mx-auto max-w-sm rounded-xl bg-background p-5 text-center">
             <p className="font-medium">The office is ready</p>
             <p className="mt-2 text-sm text-muted-foreground">
@@ -773,13 +791,9 @@ function OfficeFloor({
                       <p className="text-xs text-muted-foreground">
                         {officeExcerpt(entry.bubble, OFFICE_STATUS_LABELS[entry.status])}
                       </p>
-                      <Button size="sm" variant="outline" onClick={() => chat.open(entry.chatRef)}>
-                        <MessageCircleIcon />
-                        {entry.native ? "Open parent chat" : "Open chat"}
-                      </Button>
                       <ActorActions
                         actor={entry}
-                        online={data.online}
+                        online={data.online && data.ready}
                         onDismiss={() => setSelected(null)}
                       />
                     </div>
@@ -929,7 +943,7 @@ export function OfficePage() {
             }}
           >
             <SelectTrigger aria-label="Office environment">
-              <SelectValue placeholder="Choose environment" />
+              <SelectValue placeholder="Choose environment">{selected?.label}</SelectValue>
             </SelectTrigger>
             <SelectPopup>
               {environments.map((environment) => {

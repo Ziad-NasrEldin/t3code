@@ -4,6 +4,7 @@ import { deriveTimelineEntriesFromVisibleTurnItems, type TimelineEntry } from ".
 import { makeStreamingTimelineFixture } from "../../test-fixtures";
 import type { ChatMessage } from "../../types";
 import { cleanTranscript } from "./cleanTranscript";
+import { deriveMessagesTimelineRowsWithState } from "./MessagesTimeline.logic";
 const row = (id: string, metadata: Partial<ChatMessage> = {}): TimelineEntry => ({
   id,
   kind: "message",
@@ -63,6 +64,30 @@ it("keeps all complete final parts across runs and pages, excluding commentary a
     ...entries.slice(1, 4),
     completed,
   ]);
+  const input = {
+    timelineEntries: cleanTranscript(entries),
+    isWorking: true,
+    latestRun: null,
+    turnDiffSummaries: [],
+    supportsConversationRollback: false,
+    clean: true,
+  };
+  const projection = deriveMessagesTimelineRowsWithState(input);
+  expect(projection.rows.map((entry) => entry.id)).toEqual(["first", "attachment", "untracked"]);
+  expect(projection.rows.every((entry) => entry.kind === "message")).toBe(true);
+  // Completed/live and clean/full transitions must invalidate the incremental row cache.
+  const settled = deriveMessagesTimelineRowsWithState(
+    { ...input, timelineEntries: cleanTranscript([...entries, completed]) },
+    projection,
+  );
+  expect(settled.rows.map((entry) => entry.id)).toEqual([
+    "first",
+    "attachment",
+    "untracked",
+    "stream",
+  ]);
+  const full = deriveMessagesTimelineRowsWithState({ ...input, clean: false }, projection);
+  expect(full.rows.some((entry) => entry.kind !== "message")).toBe(true);
 });
 
 it("excludes canonical tool traces and reasoning while ordinary timeline retains them", () => {

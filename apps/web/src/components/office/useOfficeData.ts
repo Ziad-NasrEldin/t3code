@@ -11,23 +11,41 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as DateTime from "effect/DateTime";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { useEffect, useId, useState } from "react";
+import { useEffect } from "react";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentShell, useEnvironmentShellStatus } from "../../state/shell";
 import { useQuietThreadShells } from "../../state/entities";
+import { useEnvironment } from "../../state/environments";
 
 class OfficeCursorError extends Schema.TaggedError<OfficeCursorError>()("OfficeCursorError", {}) {}
 
+const generationAtom = Atom.family((id: EnvironmentId) =>
+  Atom.make((get) => get(environmentShell.stateValueAtom(id)).generation),
+);
+type OfficeInventory = Pick<OrchestrationV2OfficePage, "threads" | "children">;
+// Keep only authoritative answers, independently of short-lived query readers.
+// This is environment-scoped in-memory state; it keeps no connection or query alive.
+const retainedInventory = Atom.family((_id: EnvironmentId) =>
+  Atom.make<{ generation: number; value: OfficeInventory } | null>(null).pipe(Atom.keepAlive),
+);
 const inventory = createEnvironmentQueryAtomFamily(connectionAtomRuntime, {
   label: "office-inventory",
   staleTimeMs: Number.POSITIVE_INFINITY,
   idleTtlMs: 15_000,
-  execute: Effect.fn("Office.readInventory")(function* (_input: {
-    generation: number;
-    lease: string;
-    epoch: number;
-  }) {
+  onAnswer: (
+    target: { environmentId: EnvironmentId; input: { generation: number } },
+    value: OfficeInventory,
+    registry,
+  ) =>
+    Effect.sync(() => {
+      if (registry.get(generationAtom(target.environmentId)) === target.input.generation)
+        registry.set(retainedInventory(target.environmentId), {
+          generation: target.input.generation,
+          value,
+        });
+    }),
+  execute: Effect.fn("Office.readInventory")(function* (_input: { generation: number }) {
     const threads: OrchestrationV2OfficePage["threads"][number][] = [];
     const children: OrchestrationV2OfficePage["children"][number][] = [];
     let after: OrchestrationV2OfficePage["next"] = null;
@@ -45,18 +63,13 @@ const inventory = createEnvironmentQueryAtomFamily(connectionAtomRuntime, {
   }),
 });
 
-const generationAtom = Atom.family((id: EnvironmentId) =>
-  Atom.make((get) => get(environmentShell.stateValueAtom(id)).generation),
-);
 export function useOfficeData(environmentId: EnvironmentId, supported: boolean, active: boolean) {
-  const lease = useId();
-  const [activation, setActivation] = useState({ active, epoch: 0 });
-  if (activation.active !== active)
-    setActivation({ active, epoch: activation.epoch + (active ? 1 : 0) });
   const generation = useAtomValue(generationAtom(environmentId));
-  const atom = inventory({ environmentId, input: { generation, lease, epoch: activation.epoch } });
+  const atom = inventory({ environmentId, input: { generation } });
   const result = useAtomValue(atom);
+  const retained = useAtomValue(retainedInventory(environmentId));
   const shellStatus = useEnvironmentShellStatus(environmentId);
+  const environment = useEnvironment(environmentId);
   const shells = useQuietThreadShells();
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- coalesces authoritative shell notifications into bounded inventory reads without subscribing to transcripts
   useEffect(() => {
@@ -87,7 +100,7 @@ export function useOfficeData(environmentId: EnvironmentId, supported: boolean, 
       if (timer !== undefined) clearTimeout(timer);
     };
   }, [active, atom, environmentId, supported]);
-  const saved = AsyncResult.getOrElse(result, () => ({ threads: [], children: [] }));
+  const saved = retained?.value ?? { threads: [], children: [] };
   const byId = new Map(saved.threads.map((thread) => [thread.id, thread]));
   for (const shell of shells) {
     if (shell.environmentId !== environmentId) continue;
@@ -98,13 +111,19 @@ export function useOfficeData(environmentId: EnvironmentId, supported: boolean, 
     )
       byId.set(shell.id, shell.source);
   }
-  const online = shellStatus === "live" && generation > 0 && AsyncResult.isSuccess(result);
+  const online = environment?.connection.phase === "connected";
+  const ready =
+    shellStatus === "live" &&
+    generation > 0 &&
+    retained?.generation === generation &&
+    !AsyncResult.isFailure(result);
   const threads = [...byId.values()];
   return {
     actors: deriveOfficeActors(environmentId, threads, saved.children, online),
     children: saved.children,
     threads,
     online,
+    ready,
     loading: result.waiting,
     failed: AsyncResult.isFailure(result),
     refresh: () => appAtomRegistry.refresh(atom),

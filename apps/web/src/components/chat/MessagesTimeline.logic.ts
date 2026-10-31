@@ -74,6 +74,7 @@ import {
   formatSearchToolLabel,
 } from "@t3tools/shared/toolActivity";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
+import { cleanTranscript } from "./cleanTranscript";
 
 function timelineEntryRunId(entry: TimelineEntry): RunId | null {
   if (entry.kind === "message") {
@@ -1390,6 +1391,7 @@ function deriveTimelineTurnFolds(
 
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
+  clean?: boolean;
   pendingApprovalRequestIds?: ReadonlySet<RuntimeRequestId>;
   latestRun?: TimelineLatestRun | null;
   runningRunId?: RunId | null;
@@ -1406,6 +1408,28 @@ export function deriveMessagesTimelineRows(input: {
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;
   worktreeSetup?: WorktreeSetupSnapshot | null;
 }): MessagesTimelineRow[] {
+  // Final output can span several messages in one run. The full transcript's
+  // turn/attempt folds and activity synthesis must not reprocess clean rows.
+  if (input.clean) {
+    return cleanTranscript(input.timelineEntries).flatMap((entry) =>
+      entry.kind === "message"
+        ? [
+            {
+              kind: "message" as const,
+              id: entry.id,
+              createdAt: entry.createdAt,
+              message: entry.message,
+              ...(entry.projectedItem === undefined ? {} : { projectedItem: entry.projectedItem }),
+              showAssistantMeta: entry.message.role === "assistant",
+              showAssistantCopyButton: entry.message.role === "assistant",
+              assistantCopyStreaming: false,
+              assistantTurnDiffSummary: undefined,
+              revertTurnCount: undefined,
+            },
+          ]
+        : [],
+    );
+  }
   const timelineEntries = timelineRowEntries(input.timelineEntries);
   const isPendingApproval = (entry: WorkLogEntry) => {
     const item = entry.projectedItem?.item;
