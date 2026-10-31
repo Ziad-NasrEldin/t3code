@@ -140,8 +140,13 @@ export function compactRoute(start: Vector3, points: readonly Vector3[]) {
   }
   return result.slice(1);
 }
+interface ScannedRoute {
+  segments: Passage[];
+  intervals: (readonly [number, number])[];
+}
 interface Plan {
   segments: Passage[];
+  candidates: Passage[][];
   departure: number | null;
   order: number;
   shape?: TravelShape | undefined;
@@ -179,6 +184,7 @@ export class CorridorTraffic {
   private readonly index = new SpatialIndex<Passage>();
   private readonly plans = new Map<string, Plan>();
   private readonly parked = new Map<string, Passage>();
+  private revision = 0;
   private sequence = 0;
   private now = 0;
   private delta = 0.1;
@@ -186,7 +192,8 @@ export class CorridorTraffic {
   private budget = 2000;
   private preparing: {
     key: string;
-    scan: Generator<void, (readonly [number, number])[] | null>;
+    revision: number;
+    scan: Generator<void, ScannedRoute[]>;
   } | null = null;
   private readonly attempts = new Set<string>();
   beginFrame(delta = 0.1) {
@@ -208,44 +215,49 @@ export class CorridorTraffic {
     _interactive = false,
     useBox?: Obstacle,
     shape?: TravelShape,
+    alternatives: readonly (readonly Vector3[])[] = [],
   ) {
     const order = this.plans.get(key)?.order ?? ++this.sequence;
     this.remove(key);
-    let begin = 0;
-    const segments = route
-      .map((end, i): Passage => {
-        const from = i ? route[i - 1]! : start;
-        const finish = begin + from.distanceTo(end) / 0.9;
-        const horizontal = Math.abs(end.x - from.x) > Math.abs(end.z - from.z);
-        const radius: readonly [number, number] = shape
-          ? horizontal
-            ? [shape.front, shape.side]
-            : [shape.side, shape.front]
-          : [1.5, 1.5];
-        const passage = {
-          owner: key,
-          radius,
-          start: from.clone(),
-          end: end.clone(),
-          begin,
-          finish,
-          box: {
-            min: [
-              Math.min(from.x, end.x) - radius[0],
-              Math.min(from.z, end.z) - radius[1],
-            ] as const,
-            max: [
-              Math.max(from.x, end.x) + radius[0],
-              Math.max(from.z, end.z) + radius[1],
-            ] as const,
-          },
-        };
-        begin = finish;
-        return passage;
-      })
-      .filter((s) => s.finish > s.begin);
+    const prepare = (route: readonly Vector3[]) => {
+      let begin = 0;
+      return route
+        .map((end, i): Passage => {
+          const from = i ? route[i - 1]! : start;
+          const finish = begin + from.distanceTo(end) / 0.9;
+          const horizontal = Math.abs(end.x - from.x) > Math.abs(end.z - from.z);
+          const radius: readonly [number, number] = shape
+            ? horizontal
+              ? [shape.front, shape.side]
+              : [shape.side, shape.front]
+            : [1.5, 1.5];
+          const passage = {
+            owner: key,
+            radius,
+            start: from.clone(),
+            end: end.clone(),
+            begin,
+            finish,
+            box: {
+              min: [
+                Math.min(from.x, end.x) - radius[0],
+                Math.min(from.z, end.z) - radius[1],
+              ] as const,
+              max: [
+                Math.max(from.x, end.x) + radius[0],
+                Math.max(from.z, end.z) + radius[1],
+              ] as const,
+            },
+          };
+          begin = finish;
+          return passage;
+        })
+        .filter((s) => s.finish > s.begin);
+    };
+    const segments = prepare(route);
     this.plans.set(key, {
       segments,
+      candidates: [segments, ...alternatives.slice(0, 2).map(prepare)],
       departure: null,
       order,
       zone: useBox,
@@ -260,14 +272,20 @@ export class CorridorTraffic {
   reserved(key: string) {
     return this.plans.get(key)?.departure !== null && this.plans.has(key);
   }
-  claim(key: string, occupied: (start: Vector3, end: Vector3) => boolean) {
+  claim(
+    key: string,
+    occupied: (start: Vector3, end: Vector3) => boolean,
+    install?: (route: readonly Vector3[]) => void,
+  ) {
     const plan = this.plans.get(key);
     if (!plan) return false;
     if (plan.departure !== null) return plan.departure <= this.now;
     if (!this.attempts.delete(key) && this.preparing?.key !== key) return false;
     if (this.preparing && this.preparing.key !== key) return false;
-    this.preparing ??= { key, scan: this.scan(key, plan, occupied) };
-    let result: IteratorResult<void, (readonly [number, number])[] | null> | undefined;
+    // A multi-frame scan cannot commit against bookings added or retired while it yielded.
+    if (this.preparing && this.preparing.revision !== this.revision) this.preparing = null;
+    this.preparing ??= { key, revision: this.revision, scan: this.scan(key, plan, occupied) };
+    let result: IteratorResult<void, ScannedRoute[]> | undefined;
     while (this.budget-- > 0) {
       result = this.preparing.scan.next();
       if (result.done) break;
@@ -277,35 +295,52 @@ export class CorridorTraffic {
       return false;
     }
     this.preparing = null;
-    const intervals = result.value;
-    if (!intervals) return false;
-    // A scan may span frames, during which a new physical holder can appear
-    // on a segment already scanned. Recheck before making a durable booking.
-    if (plan.segments.some((segment) => occupied(segment.start, segment.end))) return false;
-    intervals.sort((a, b) => a[0] - b[0]);
-    let departure = this.now;
-    for (const [begin, finish] of intervals)
-      if (departure >= begin && departure <= finish) departure = finish + 0.001;
-    if (!Number.isFinite(departure)) return false;
-    // Waiting has physical capacity only at the current berth; never reserve a later start in a through aisle.
-
-    const source = plan.segments[0]?.start;
-    if (source && departure > this.now) {
-      const hold = stationary(key, source, this.now, departure, plan.shape?.source);
-      for (const other of this.index.query(hold.box)) {
-        const interval = conflict(hold, other);
-        if (interval && interval[0] <= 0 && interval[1] >= 0) return false;
+    let best: { segments: Passage[]; departure: number; arrival: number } | null = null;
+    for (const { segments, intervals } of result.value) {
+      if (segments.some((segment) => occupied(segment.start, segment.end))) continue;
+      intervals.sort((a, b) => a[0] - b[0]);
+      let departure = this.now;
+      for (const [begin, finish] of intervals)
+        if (departure >= begin && departure <= finish) departure = finish + 0.001;
+      if (!Number.isFinite(departure)) continue;
+      const source = segments[0]?.start;
+      if (source && departure > this.now) {
+        const hold = stationary(key, source, this.now, departure, plan.shape?.source);
+        if (
+          [...this.index.query(hold.box)].some((other) => {
+            const interval = conflict(hold, other);
+            return interval && interval[0] <= 0 && interval[1] >= 0;
+          })
+        )
+          continue;
       }
-    }
-    const last = plan.segments.at(-1);
-    if (last) {
-      const end = stationary(key, last.end, departure + last.finish, Infinity, plan.shape?.target);
-      for (const other of this.index.query(end.box)) {
-        if (other.owner === key) continue;
-        const interval = conflict(end, other);
-        if (interval && interval[0] <= 0 && interval[1] >= 0) return false;
+      const last = segments.at(-1);
+      if (last) {
+        const end = stationary(
+          key,
+          last.end,
+          departure + last.finish,
+          Infinity,
+          plan.shape?.target,
+        );
+        if (
+          [...this.index.query(end.box)].some((other) => {
+            if (other.owner === key) return false;
+            const interval = conflict(end, other);
+            return interval && interval[0] <= 0 && interval[1] >= 0;
+          })
+        )
+          continue;
       }
+      const arrival = departure + (last?.finish ?? 0);
+      if (!best || arrival < best.arrival - 0.001) best = { segments, departure, arrival };
     }
+    if (!best) return false;
+    const { departure } = best;
+    plan.segments = best.segments;
+    plan.candidates = [plan.segments];
+    const source = plan.segments[0]?.start,
+      last = plan.segments.at(-1);
     plan.departure = departure;
     for (const segment of plan.segments) {
       segment.begin += departure;
@@ -326,30 +361,40 @@ export class CorridorTraffic {
       plan.reservations.push(stationary(key, center, this.now, Infinity, box));
     }
     for (const reservation of plan.reservations) this.index.set(reservation, reservation.box);
+    this.revision++;
+    install?.(plan.segments.map((segment) => segment.end.clone()));
     return departure <= this.now;
   }
   private *scan(
     key: string,
     plan: Plan,
     occupied: (start: Vector3, end: Vector3) => boolean,
-  ): Generator<void, (readonly [number, number])[] | null> {
-    const intervals: (readonly [number, number])[] = [];
-    for (const segment of plan.segments) {
-      if (occupied(segment.start, segment.end)) return null;
-      yield;
-      for (const other of this.index.query(segment.box)) {
+  ): Generator<void, ScannedRoute[]> {
+    const candidates: ScannedRoute[] = [];
+    for (const segments of plan.candidates) {
+      const intervals: (readonly [number, number])[] = [];
+      let blocked = false;
+      for (const segment of segments) {
+        if (occupied(segment.start, segment.end)) {
+          blocked = true;
+          break;
+        }
         yield;
-        if (
-          other.owner === key ||
-          other.finish < this.now - 0.25 ||
-          !overlaps(segment.box, other.box)
-        )
-          continue;
-        const interval = conflict(segment, other);
-        if (interval) intervals.push(interval);
+        for (const other of this.index.query(segment.box)) {
+          yield;
+          if (
+            other.owner === key ||
+            other.finish < this.now - 0.25 ||
+            !overlaps(segment.box, other.box)
+          )
+            continue;
+          const interval = conflict(segment, other);
+          if (interval) intervals.push(interval);
+        }
       }
+      if (!blocked) candidates.push({ segments, intervals });
     }
-    return intervals;
+    return candidates;
   }
   redirect(
     key: string,
@@ -376,6 +421,7 @@ export class CorridorTraffic {
     const end = last ? stationary(key, last.end, this.now, Infinity, plan!.shape?.target) : null;
     this.remove(key);
     if (end) {
+      this.revision++;
       this.parked.set(key, end);
       this.index.set(end, end.box);
     }
@@ -391,11 +437,13 @@ export class CorridorTraffic {
     const plan = this.plans.get(key);
     if (plan) for (const segment of plan.reservations) this.index.delete(segment);
     const parked = this.parked.get(key);
+    if (parked || plan?.reservations.length) this.revision++;
     if (parked) this.index.delete(parked);
     this.parked.delete(key);
     this.plans.delete(key);
   }
   clear() {
+    this.revision++;
     this.index.clear();
     this.plans.clear();
     this.parked.clear();

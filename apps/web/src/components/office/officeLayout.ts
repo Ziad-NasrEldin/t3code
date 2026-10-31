@@ -135,6 +135,7 @@ export function routeBetweenSites(
   from: RoomSite | null,
   to: RoomSite | null,
   origin?: Point,
+  penalties: ReadonlyArray<readonly [Point, Point]> = [],
 ): ReadonlyArray<Point> {
   if (!from && !to && !origin) return [[7, 0]];
   const points: Point[] = [],
@@ -189,7 +190,13 @@ export function routeBetweenSites(
     for (const next of edges.get(at)!) {
       const a = points[at]!,
         b = points[next]!;
-      const distance = distances[at]! + Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
+      const penalized = penalties.some(
+        ([c, d]) =>
+          (a[0] === c[0] && a[1] === c[1] && b[0] === d[0] && b[1] === d[1]) ||
+          (a[0] === d[0] && a[1] === d[1] && b[0] === c[0] && b[1] === c[1]),
+      );
+      const distance =
+        distances[at]! + (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1])) * (penalized ? 3 : 1);
       if (distance < distances[next]!) {
         distances[next] = distance;
         previous.set(next, at);
@@ -202,6 +209,29 @@ export function routeBetweenSites(
   if (!from && !origin) path.unshift([7, 0]);
   if (!to) path.push([7, 0]);
   return path.filter((p, i) => i === 0 || p[0] !== path[i - 1]![0] || p[1] !== path[i - 1]![1]);
+}
+export function routeOptionsBetweenSites(
+  from: RoomSite | null,
+  to: RoomSite | null,
+  origin?: Point,
+): ReadonlyArray<ReadonlyArray<Point>> {
+  const paths = [routeBetweenSites(from, to, origin)];
+  const penalties: (readonly [Point, Point])[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const previous = paths.at(-1)!;
+    for (let i = 1; i < previous.length; i++) penalties.push([previous[i - 1]!, previous[i]!]);
+    const candidate = routeBetweenSites(from, to, origin, penalties);
+    if (
+      paths.some(
+        (path) =>
+          path.length === candidate.length &&
+          path.every((point, i) => point[0] === candidate[i]![0] && point[1] === candidate[i]![1]),
+      )
+    )
+      break;
+    paths.push(candidate);
+  }
+  return paths;
 }
 export function routeToLobby(site: RoomSite): ReadonlyArray<Point> {
   return routeBetweenSites(site, null);

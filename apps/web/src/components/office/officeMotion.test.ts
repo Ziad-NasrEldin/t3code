@@ -184,8 +184,8 @@ it("brings 60 simultaneous normal-speed occupants out and home with fair concurr
     }),
   );
   const outward = tickCrowd(motion, lives, 2400);
-  expect(outward.seconds).toBeLessThan(900);
-  expect(outward.latestFirstMove).toBeLessThan(448.7);
+  expect(outward.seconds).toBeLessThan(500);
+  expect(outward.latestFirstMove).toBeLessThan(200);
   expect(outward.overlap).toBe("");
   expect(outward.furniture).toBe("");
   expect(outward.longestStall).toBeLessThan(20);
@@ -197,8 +197,8 @@ it("brings 60 simultaneous normal-speed occupants out and home with fair concurr
   ).toBe(true);
   for (const life of lives) motion.update({ ...life.actor, status: "working" });
   const inward = tickCrowd(motion, lives, 2400);
-  expect(inward.seconds).toBeLessThan(1000);
-  expect(inward.latestFirstMove).toBeLessThan(1146.7);
+  expect(inward.seconds).toBeLessThan(500);
+  expect(inward.latestFirstMove).toBeLessThan(240);
   expect(inward.overlap).toBe("");
   expect(inward.furniture).toBe("");
   expect(inward.longestStall).toBeLessThan(20);
@@ -490,6 +490,45 @@ it("drains conflicting traffic in ticket order without letting a new convoy star
   arrivals.beginFrame();
   expect(arrivals.claim("long-scan", (start) => start.x === 0)).toBe(false);
   expect(arrivals.reserved("long-scan")).toBe(false);
+
+  const revised = new CorridorTraffic();
+  revised.plan("arrival", new Vector3(0, 0.07, 0), [new Vector3(200, 0.07, 0)]);
+  revised.beginFrame();
+  expect(revised.claim("arrival", () => false)).toBe(true);
+  revised.plan("scanning", new Vector3(200, 0.07, -10), [
+    new Vector3(200, 0.07, 10),
+    ...Array.from({ length: 2100 }, (_, i) => new Vector3(201 + i, 0.07, 10)),
+  ]);
+  revised.beginFrame();
+  expect(revised.claim("scanning", () => false)).toBe(false);
+  // Arrival replaces a predicted endpoint hold with current occupancy during preparation.
+  revised.arrive("arrival");
+  for (let frame = 0; frame < 4; frame++) {
+    revised.beginFrame();
+    expect(revised.claim("scanning", () => false)).toBe(false);
+  }
+  expect(revised.reserved("scanning")).toBe(false);
+
+  const continuous = new CorridorTraffic();
+  const v = (x: number, z: number) => new Vector3(x, 0.07, z);
+  continuous.plan("leader", v(-20, 0), [v(200, 0)]);
+  continuous.beginFrame();
+  expect(continuous.claim("leader", () => false)).toBe(true);
+  continuous.plan("older-crossing", v(0, -20), [v(0, 20)], false, undefined, undefined, [
+    [v(10, -20), v(10, 20), v(0, 20)],
+  ]);
+  continuous.beginFrame();
+  expect(continuous.claim("older-crossing", () => false)).toBe(false);
+  expect(continuous.reserved("older-crossing")).toBe(true);
+  let started = false;
+  for (let frame = 0; frame < 150; frame++) {
+    continuous.beginFrame();
+    continuous.plan(`new-${frame}`, v(-10, 0), [v(10, 0)]);
+    continuous.claim(`new-${frame}`, () => false);
+    started ||= continuous.claim("older-crossing", () => false);
+    continuous.remove(`new-${frame}`);
+  }
+  expect(started).toBe(true);
 });
 it("replaces a remote rest journey at a cleared node when new work arrives", () => {
   const motion = new OfficeMotion();
@@ -507,6 +546,50 @@ it("replaces a remote rest journey at a cleared node when new work arrives", () 
   expect(life.position.distanceTo(life.home)).toBeLessThan(0.05);
   expect(nearestRest).toBeGreaterThan(40);
   expect(before.distanceTo(life.home)).toBeGreaterThan(10);
+});
+
+it("reserves a clear alternative atomically without retaining rejected paths", () => {
+  const traffic = new CorridorTraffic();
+  const point = (x: number, z: number) => new Vector3(x, 0.07, z);
+  traffic.plan("parked", point(-0.1, 0), [point(0, 0)]);
+  traffic.beginFrame();
+  expect(traffic.claim("parked", () => false)).toBe(true);
+  traffic.arrive("parked");
+  const route = [point(0, 20)];
+  const alternate = [point(10, -20), point(10, 20), point(0, 20)];
+  traffic.plan("walker", point(0, -20), route, false, undefined, undefined, [alternate]);
+  traffic.beginFrame();
+  expect(
+    traffic.claim(
+      "walker",
+      () => false,
+      (selected) => route.splice(0, route.length, ...selected),
+    ),
+  ).toBe(true);
+  expect(route).toEqual(alternate);
+  traffic.plan("rejected-path-crossing", point(-5, -10), [point(5, -10)]);
+  traffic.beginFrame();
+  expect(traffic.claim("rejected-path-crossing", () => false)).toBe(true);
+  traffic.plan("selected-path-crossing", point(5, 0), [point(10, 0)]);
+  traffic.beginFrame();
+  expect(traffic.claim("selected-path-crossing", () => false)).toBe(false);
+  traffic.remove("walker");
+  traffic.remove("selected-path-crossing");
+  traffic.plan("selected-path-crossing", point(5, 0), [point(10, 0)]);
+  traffic.beginFrame();
+  expect(traffic.claim("selected-path-crossing", () => false)).toBe(true);
+
+  const pending = Array.from({ length: 2100 }, (_, i) => point(100 + i, 100));
+  traffic.plan("reused", point(99, 100), pending, false, undefined, undefined, [pending]);
+  traffic.beginFrame();
+  expect(traffic.claim("reused", () => false)).toBe(false);
+  traffic.remove("reused");
+  traffic.plan("reused", point(5000, 100), [point(5010, 100)]);
+  traffic.beginFrame();
+  expect(traffic.claim("reused", () => false)).toBe(true);
+  traffic.plan("cancelled-path-crossing", point(100, 95), [point(100, 105)]);
+  traffic.beginFrame();
+  expect(traffic.claim("cancelled-path-crossing", () => false)).toBe(true);
 });
 
 it("retains and advances all 750 logical occupants with compact routes, then clears every reservation", () => {

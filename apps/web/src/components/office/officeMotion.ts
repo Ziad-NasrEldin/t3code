@@ -12,6 +12,7 @@ import {
   roomPoint,
   roomLocal,
   routeBetweenSites,
+  routeOptionsBetweenSites,
   ringSize,
   type Point,
   type RoomSite,
@@ -273,7 +274,12 @@ export class OfficeMotion {
     this.traffic.remove(life.key, life.visit);
     life.walking = false;
   }
-  private setRoute(life: Life, route: readonly Vector3[], reserved = false) {
+  private setRoute(
+    life: Life,
+    route: readonly Vector3[],
+    reserved = false,
+    alternatives: readonly (readonly Vector3[])[] = [],
+  ) {
     life.route.splice(0, life.route.length, ...compactRoute(life.position, route));
     life.walking =
       life.route.length > 0 &&
@@ -288,6 +294,7 @@ export class OfficeMotion {
           ? [...this.itemBoxes.values()].find((item) => item.owner === life.key)?.box
           : undefined,
         this.travelShape(life, life.route.at(-1)!),
+        alternatives.map((path) => compactRoute(life.position, path)),
       );
     else if (!life.route.length) this.releaseTraffic(life);
     life.routeBlocked = false;
@@ -318,8 +325,10 @@ export class OfficeMotion {
   }
   private claimTraffic(life: Life) {
     if (life.requested && !this.itemAvailable(life)) return false;
-    const claimed = this.traffic.claim(life.key, (start, end) =>
-      this.passageBlocked(life, start, end),
+    const claimed = this.traffic.claim(
+      life.key,
+      (start, end) => this.passageBlocked(life, start, end),
+      (route) => life.route.splice(0, life.route.length, ...route),
     );
     if (this.traffic.reserved(life.key) && life.requested) this.activateItem(life);
     if (claimed) life.walking = true;
@@ -549,6 +558,16 @@ export class OfficeMotion {
       return;
     }
     let path: Vector3[];
+    let alternatives: Vector3[][] = [];
+    const through = (from: RoomSite | null, prefix: readonly Vector3[]) => {
+      const paths = routeOptionsBetweenSites(from, targetSite).map((route) => [
+        ...prefix,
+        ...route.map(vector),
+        ...entry,
+      ]);
+      alternatives = paths.slice(1);
+      return paths[0]!;
+    };
     const corridor = cleared
       ? Array.from(
           { length: Math.max(life.site.ring, life.restSite?.ring ?? 0) + 1 },
@@ -591,12 +610,8 @@ export class OfficeMotion {
         life.routeBlocked = true;
         return;
       }
-      path = [
-        ...(inside ? pathsToWorld(inside, life.site, life.variant) : homeRoute),
-        ...(destination === "home"
-          ? []
-          : [...routeBetweenSites(life.site, targetSite).map(vector), ...entry]),
-      ];
+      const prefix = inside ? pathsToWorld(inside, life.site, life.variant) : homeRoute;
+      path = destination === "home" ? [...prefix] : through(life.site, prefix);
     } else if (Math.abs(life.position.x) <= 7.8 && Math.abs(life.position.z) <= 6.8) {
       const direct = destination === "lobby" && (visiting || !life.restSite);
       const target: Point = direct
@@ -614,11 +629,9 @@ export class OfficeMotion {
         life.routeBlocked = true;
         return;
       }
-      path = direct
-        ? inside
-        : [...inside, ...routeBetweenSites(null, targetSite).map(vector), ...entry];
+      path = direct ? inside : through(null, inside);
     } else {
-      path = [...restRoute, ...routeBetweenSites(life.restSite, targetSite).map(vector), ...entry];
+      path = through(life.restSite, restRoute);
     }
     const priorDestination = life.destination;
     life.destination = destination;
@@ -637,7 +650,7 @@ export class OfficeMotion {
     }
     life.pendingTravel = null;
     life.destination = destination;
-    this.setRoute(life, path, cleared);
+    this.setRoute(life, path, cleared, alternatives);
     life.phase = "walking";
     life.routeBlocked = false;
   }
