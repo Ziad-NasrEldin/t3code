@@ -3741,6 +3741,7 @@ function buildAssistantArtifacts(input: {
   readonly providerTurnId: OrchestrationV2ProviderTurn["id"];
   readonly nativeItemId: string;
   readonly text: string;
+  readonly responseKind?: "final" | "commentary";
   readonly ordinal: number;
   readonly startedAt: DateTime.Utc;
   readonly completedAt: DateTime.Utc;
@@ -3793,6 +3794,7 @@ function buildAssistantArtifacts(input: {
       runId: input.turnInput.runId,
       nodeId,
       role: "assistant",
+      ...(input.responseKind ? { responseKind: input.responseKind } : {}),
       text: input.text,
       attachments: [],
       streaming: false,
@@ -3815,6 +3817,7 @@ function buildAssistantArtifacts(input: {
       completedAt: input.completedAt,
       updatedAt: input.completedAt,
       type: "assistant_message",
+      ...(input.responseKind ? { responseKind: input.responseKind } : {}),
       messageId,
       text: input.text,
       streaming: false,
@@ -3878,6 +3881,10 @@ interface ActiveClaudeTurnContext {
     fallbackText: string;
     fallbackNativeItemId: string;
     emittedNativeItemIds: Set<string>;
+    segments: Map<
+      string,
+      { nativeMessageId: string; artifacts: ReturnType<typeof buildAssistantArtifacts> }
+    >;
     // The CLI repeats a notice that ends a prompt as the turn's result text.
     noticeTexts: Set<string>;
   };
@@ -7309,6 +7316,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               providerTurnId: input.context.providerTurnId,
               nativeItemId: input.context.assistant.fallbackNativeItemId,
               text: input.context.assistant.fallbackText,
+              responseKind: "final",
               ordinal,
               startedAt: input.context.startedAt,
               completedAt: input.completedAt,
@@ -7523,44 +7531,73 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         const emitAssistantTextArtifacts = Effect.fnUntraced(function* (input: {
           readonly context: ActiveClaudeTurnContext;
           readonly nativeItemId: string;
+          readonly nativeMessageId?: string;
           readonly text: string;
+          readonly responseKind?: "final" | "commentary";
         }) {
-          if (input.context.assistant.emittedNativeItemIds.has(input.nativeItemId)) {
-            return;
+          const assistant = input.context.assistant;
+          if (!assistant.emittedNativeItemIds.has(input.nativeItemId) && input.text.length > 0) {
+            assistant.emittedNativeItemIds.add(input.nativeItemId);
+            const now = yield* DateTime.now;
+            const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
+            const artifacts = buildAssistantArtifacts({
+              idAllocator,
+              turnInput: input.context.input,
+              providerTurnId: input.context.providerTurnId,
+              nativeItemId: input.nativeItemId,
+              text: input.text,
+              ...(input.responseKind ? { responseKind: input.responseKind } : {}),
+              ordinal,
+              startedAt: now,
+              completedAt: now,
+            });
+            if (input.nativeMessageId)
+              assistant.segments.set(input.nativeItemId, {
+                nativeMessageId: input.nativeMessageId,
+                artifacts,
+              });
+            yield* emitProviderEvent({
+              type: "node.updated",
+              driver: CLAUDE_PROVIDER,
+              node: artifacts.node,
+            });
+            yield* emitProviderEvent({
+              type: "message.updated",
+              driver: CLAUDE_PROVIDER,
+              message: artifacts.message,
+            });
+            yield* emitProviderEvent({
+              type: "turn_item.updated",
+              driver: CLAUDE_PROVIDER,
+              turnItem: artifacts.turnItem,
+            });
           }
-          input.context.assistant.emittedNativeItemIds.add(input.nativeItemId);
-          const now = yield* DateTime.now;
-          const ordinal = yield* resolveItemOrdinal(input.context, input.nativeItemId);
-          const artifacts = buildAssistantArtifacts({
-            idAllocator,
-            turnInput: input.context.input,
-            providerTurnId: input.context.providerTurnId,
-            nativeItemId: input.nativeItemId,
-            text: input.text,
-            ordinal,
-            startedAt: now,
-            completedAt: now,
-          });
-          yield* Effect.all(
-            [
-              emitProviderEvent({
-                type: "node.updated",
-                driver: CLAUDE_PROVIDER,
-                node: artifacts.node,
-              }),
-              emitProviderEvent({
+          // SDK blocks can have distinct UUIDs but share one provider message. Its closing
+          // stop reason classifies every part; retaining only the closing block loses content.
+          if (input.responseKind && input.nativeMessageId)
+            for (const [key, segment] of assistant.segments) {
+              if (
+                segment.nativeMessageId !== input.nativeMessageId ||
+                segment.artifacts.message.responseKind === input.responseKind
+              )
+                continue;
+              const message = { ...segment.artifacts.message, responseKind: input.responseKind };
+              const turnItem = { ...segment.artifacts.turnItem, responseKind: input.responseKind };
+              assistant.segments.set(key, {
+                ...segment,
+                artifacts: { ...segment.artifacts, message, turnItem },
+              });
+              yield* emitProviderEvent({
                 type: "message.updated",
                 driver: CLAUDE_PROVIDER,
-                message: artifacts.message,
-              }),
-              emitProviderEvent({
+                message,
+              });
+              yield* emitProviderEvent({
                 type: "turn_item.updated",
                 driver: CLAUDE_PROVIDER,
-                turnItem: artifacts.turnItem,
-              }),
-            ],
-            { concurrency: 1 },
-          );
+                turnItem,
+              });
+            }
         });
 
         const finalizeActiveTurnAfterQueryExit = Effect.fnUntraced(function* (
@@ -9134,11 +9171,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           ) {
             return;
           }
-          if (assistantText !== null && assistantText.text.length > 0) {
+          if (assistantText !== null) {
             yield* emitAssistantTextArtifacts({
               context,
               nativeItemId: assistantText.nativeItemId,
+              ...(message.type === "assistant" ? { nativeMessageId: message.message.id } : {}),
               text: assistantText.text,
+              ...(message.type === "assistant" && typeof message.message.stop_reason === "string"
+                ? {
+                    responseKind:
+                      message.message.stop_reason === "tool_use"
+                        ? ("commentary" as const)
+                        : ("final" as const),
+                  }
+                : {}),
             });
             return;
           }
@@ -10185,6 +10231,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                 fallbackText: "",
                 fallbackNativeItemId: `assistant:${turnInput.runId}`,
                 emittedNativeItemIds: new Set(),
+                segments: new Map(),
                 noticeTexts: new Set(),
               },
               reasoning: {

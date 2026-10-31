@@ -6,8 +6,9 @@ import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { type OfficeActor } from "@t3tools/client-runtime/state/office";
 import {
-  DECK_HEIGHT,
   ringSize,
+  projectRoomKey,
+  restAreaKey,
   roomRotation,
   type RoomSite,
   type RoomVariant,
@@ -29,6 +30,7 @@ import {
   advancePerformance,
   createPerformanceInstance,
 } from "./officeRenderer";
+import { interiorOffset } from "./officeInterior";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
 
@@ -50,20 +52,21 @@ const ASSETS = [
 export interface VisualActor {
   readonly actor: OfficeActor;
   readonly transition: "none" | "arriving" | "departing";
+  readonly generation: number;
 }
 export interface SceneRoom {
   readonly id: string;
   readonly title: string;
   readonly site: RoomSite;
   readonly variant: RoomVariant;
-  readonly deck: number;
+  readonly projectId: string | null;
+  readonly generation: number;
   readonly attaching?: boolean;
   readonly removing?: boolean;
 }
 export interface OfficeFocus {
   readonly x: number;
   readonly z: number;
-  readonly deck: number;
   readonly span: number;
   readonly serial: number;
 }
@@ -71,6 +74,7 @@ interface SceneProps {
   readonly actors: ReadonlyArray<VisualActor>;
   readonly rooms: ReadonlyArray<SceneRoom>;
   readonly slots: Readonly<Record<string, number>>;
+  readonly rests: Readonly<Record<string, number>>;
   readonly motion: OfficeMotion;
   readonly focus: OfficeFocus;
   readonly selected: string | null;
@@ -102,7 +106,13 @@ function disposeSkeletons(root: Object3D) {
 
 function StaticAsset({ name, onPick }: { name: string; onPick?: (object: Object3D) => void }) {
   const asset = useAsset(name);
-  const [root] = useState(() => clone(asset.scene));
+  const [root] = useState(() => {
+    const root = clone(asset.scene);
+    root.traverse((object) => {
+      object.position.x += interiorOffset(name, object.name);
+    });
+    return root;
+  });
   return (
     <primitive
       object={root}
@@ -134,11 +144,7 @@ function ProjectRoom({
   useFrame((state, dt) => {
     const label = labels.get(`room:${room.id}`);
     if (label) {
-      const point = new Vector3(
-        room.site.x,
-        room.deck * DECK_HEIGHT + 0.5,
-        room.site.z + 4,
-      ).project(state.camera);
+      const point = new Vector3(room.site.x, 0.5, room.site.z + 4).project(state.camera);
       label.hidden = Math.abs(point.x) > 1 || Math.abs(point.y) > 1;
       label.style.transform = `translate(${((point.x + 1) * state.size.width) / 2}px,${((1 - point.y) * state.size.height) / 2}px) translate(-50%,-50%)`;
     }
@@ -147,32 +153,39 @@ function ProjectRoom({
       : Math.min(1, elapsed.current + Math.min(dt, 0.05) * 1.5);
     if (group.current) {
       const t = reduced ? (room.removing ? 0 : 1) : elapsed.current;
-      group.current.position.y = room.deck * DECK_HEIGHT - (1 - t) * (1 - t) * 3;
+      group.current.position.y = -(1 - t) * (1 - t) * 3;
       group.current.scale.y = 0.85 + 0.15 * t;
     }
   });
   return (
     <group
       ref={group}
-      position={[room.site.x, room.deck * DECK_HEIGHT, room.site.z]}
+      position={[room.site.x, 0, room.site.z]}
       rotation={[0, roomRotation(room.site, room.variant), 0]}
     >
-      <StaticAsset
-        name={room.variant}
-        onPick={(object) => {
-          if (
-            object.name.toLowerCase().includes("keyboard") ||
-            object.name.toLowerCase().includes("desk_b")
-          )
-            onAmenity("keyboard", room.id);
-        }}
-      />
+      {room.projectId === null ? (
+        <mesh position={[0, -0.18, 0]}>
+          <boxGeometry args={[12, 0.35, 11]} />
+          <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
+        </mesh>
+      ) : (
+        <StaticAsset
+          name={room.variant}
+          onPick={(object) => {
+            if (
+              object.name.toLowerCase().includes("keyboard") ||
+              object.name.toLowerCase().includes("desk_b")
+            )
+              onAmenity("keyboard", room.id);
+          }}
+        />
+      )}
     </group>
   );
 }
-function LoopFloor({ rings, deck }: { rings: number; deck: number }) {
+function LoopFloor({ rings }: { rings: number }) {
   return (
-    <group position={[0, deck * DECK_HEIGHT, 0]}>
+    <group>
       {Array.from({ length: rings }, (_, i) =>
         i === 0 ? null : (
           <group key={i}>
@@ -195,20 +208,14 @@ function LoopFloor({ rings, deck }: { rings: number; deck: number }) {
           </group>
         ),
       )}
-      <mesh position={[9.5, -0.1, 8.5]}>
-        <boxGeometry args={[2.8, 0.18, 2.8]} />
-        <meshStandardMaterial color={OFFICE_COLORS.lift} roughness={0.6} />
-      </mesh>
     </group>
   );
 }
 function Furniture({
-  deck,
   motion,
   onAmenity,
   lamp,
 }: {
-  deck: number;
   motion: OfficeMotion;
   onAmenity: SceneProps["onAmenity"];
   lamp: boolean;
@@ -219,9 +226,7 @@ function Furniture({
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- disposes only furniture materials cloned for responsive light and board effects
   useEffect(() => () => instance.dispose(), [instance]);
   useFrame(() => {
-    const performers = [...motion.lives.values()].filter(
-      (life) => life.lobbyDeck === deck && life.performanceReady,
-    );
+    const performers = [...motion.lives.values()].filter((life) => life.performanceReady);
     updateFurniture(
       root,
       lamp,
@@ -238,7 +243,7 @@ function Furniture({
     else if (n.includes("directory")) onAmenity("directory");
   };
   return (
-    <group position={[0, deck * DECK_HEIGHT, 0]}>
+    <group>
       <primitive
         object={root}
         dispose={null}
@@ -269,19 +274,19 @@ function Furniture({
     </group>
   );
 }
-function CupHome({ deck, motion }: { deck: number; motion: OfficeMotion }) {
+function CupHome({ motion }: { motion: OfficeMotion }) {
   const asset = useAsset("cup"),
     [root] = useState(() => clone(asset.scene));
   useFrame(() =>
     updateCupHome(
       root,
       [...motion.lives.values()].some(
-        (life) => life.lobbyDeck === deck && life.performance === "coffee" && life.performanceReady,
+        (life) => life.performance === "coffee" && life.performanceReady,
       ),
     ),
   );
   return (
-    <group position={[0, deck * DECK_HEIGHT, 0]}>
+    <group>
       <primitive object={root} dispose={null} />
     </group>
   );
@@ -308,10 +313,10 @@ function Performance({ life, onReady }: { life: Life; onReady: () => void }) {
     angle = keyboard ? roomRotation(life.site, life.variant) : 0,
     offset = PERFORMANCES[name].offset;
   const origin = keyboard
-    ? new Vector3(life.site.x, life.homeDeck * DECK_HEIGHT, life.site.z).sub(
+    ? new Vector3(life.site.x, 0, life.site.z).sub(
         new Vector3(offset[0], 0, offset[1]).applyAxisAngle(new Vector3(0, 1, 0), angle),
       )
-    : new Vector3(0, life.lobbyDeck * DECK_HEIGHT, 0);
+    : new Vector3(0, 0, 0);
   return (
     <group ref={wrapper} position={origin} rotation={[0, angle, 0]}>
       <primitive object={instance.root} dispose={null} />
@@ -346,8 +351,8 @@ function ActorModel({
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- resets lifecycle uniforms when an authoritative arrival, settlement or undo changes this retained scene actor
   useEffect(() => {
-    resetActorLifecycle(instance, visual.transition);
-  }, [instance, visual.transition]);
+    resetActorLifecycle(instance, visual.transition, visual.generation);
+  }, [instance, visual.transition, visual.generation]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- owns cloned skeletons, per-actor materials and lifecycle particle buffers while immutable source geometry stays shared
   useEffect(
     () => () => {
@@ -421,6 +426,7 @@ function Scene({
   actors,
   rooms,
   slots,
+  rests,
   motion,
   focus,
   selected,
@@ -442,16 +448,23 @@ function Scene({
   useEffect(() => {
     const present = new Set<string>();
     for (const { actor, transition } of actors) {
-      const room = rooms.find((room) => room.id === actor.projectId);
+      const room = rooms.find(
+        (room) => room.id === projectRoomKey(actor.projectId, slots[actor.key] ?? 0),
+      );
       if (!room) continue;
       present.add(actor.key);
-      motion.add(actor, room.site, room.variant, slots[actor.key] ?? 0);
+      const restSlot = rests[actor.key] ?? 0;
+      const restSite = rooms.find((room) => room.id === restAreaKey(restSlot))?.site ?? null;
+      motion.add(actor, room.site, room.variant, slots[actor.key] ?? 0, {
+        site: restSite,
+        slot: restSlot,
+      });
       motion.setDeparture(actor.key, transition === "departing");
       motion.update(actor);
     }
     for (const key of motion.lives.keys()) if (!present.has(key)) motion.remove(key);
     invalidate();
-  }, [actors, rooms, slots, motion, invalidate]);
+  }, [actors, rooms, slots, rests, motion, invalidate]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- caps visible motion at 30 demand frames per second and suspends all decorative rendering when hidden
   useEffect(() => {
     if (!visible) return;
@@ -491,13 +504,7 @@ function Scene({
     return () => clearInterval(timer);
   }, [gl, onMetrics, visible]);
   const visibleActors = actors
-    .filter(({ actor }) => {
-      const life = lives.get(actor.key);
-      return life
-        ? Math.abs(life.position.y - focus.deck * DECK_HEIGHT) < 3
-        : Math.floor((slots[actor.key] ?? 0) / 2) === focus.deck;
-    })
-    .sort(
+    .toSorted(
       (a, b) =>
         Number(b.actor.key === selected) - Number(a.actor.key === selected) ||
         Number(b.actor.status === "waiting") - Number(a.actor.status === "waiting") ||
@@ -539,16 +546,14 @@ function Scene({
         <planeGeometry args={[400 + maxRing * 40, 400 + maxRing * 40]} />
         <meshStandardMaterial color={OFFICE_COLORS.ground} roughness={1} />
       </mesh>
-      <group position={[0, focus.deck * DECK_HEIGHT, 0]}>
-        <StaticAsset name="lobby" />
-      </group>
-      <CupHome deck={focus.deck} motion={motion} />
-      <Furniture deck={focus.deck} motion={motion} lamp={lamp} onAmenity={onAmenity} />
-      <LoopFloor rings={maxRing + 1} deck={focus.deck} />
+      <StaticAsset name="lobby" />
+      <CupHome motion={motion} />
+      <Furniture motion={motion} lamp={lamp} onAmenity={onAmenity} />
+      <LoopFloor rings={maxRing + 1} />
       {visibleRooms.map((room) => (
         <ProjectRoom
-          key={`${room.id}:${focus.deck}`}
-          room={{ ...room, deck: focus.deck }}
+          key={room.id}
+          room={room}
           reduced={reduced}
           labels={labels}
           onAmenity={onAmenity}

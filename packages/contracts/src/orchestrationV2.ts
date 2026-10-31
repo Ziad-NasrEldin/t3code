@@ -1260,7 +1260,12 @@ export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Typ
 export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpires", "onReturn"]);
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
+/** Provider-authored response semantics; absence in older history means unknown. */
+export const OrchestrationV2AssistantResponseKind = Schema.Literals(["commentary", "final"]);
+export type OrchestrationV2AssistantResponseKind = typeof OrchestrationV2AssistantResponseKind.Type;
+
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -1585,6 +1590,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
+    responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
     messageId: MessageId,
     text: Schema.String,
     textOmitted: DedupedBodyMarker,
@@ -2417,6 +2423,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
+    responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
     messageId: MessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),

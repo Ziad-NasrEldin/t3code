@@ -19,6 +19,7 @@ import {
 
 const now = DateTime.makeUnsafe("2026-04-20T00:00:00.000Z");
 
+const decodeOrchestrationV2TurnItem = Schema.decodeUnknownSync(OrchestrationV2TurnItem);
 const decodeOrchestrationV2TurnItemJson = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 const encodeOrchestrationV2TurnItemJson = Schema.encodeSync(OrchestrationV2TurnItemJson);
 const decodeOrchestrationV2Subagent = Schema.decodeUnknownSync(OrchestrationV2Subagent);
@@ -105,6 +106,19 @@ describe("orchestration V2 contracts", () => {
       updatedAt: DateTime.formatIso(now),
       ...extra,
     });
+    for (const responseKind of [undefined, "commentary", "final"] as const) {
+      const assistant = item("response", "assistant_message", {
+        messageId: "response",
+        text: "Part",
+        streaming: false,
+        ...(responseKind ? { responseKind } : {}),
+      });
+      const decoded = decodeOrchestrationV2TurnItemJson(assistant);
+      expect(encodeOrchestrationV2TurnItemJson(decoded)).toEqual(assistant);
+      expect(decodeOrchestrationV2TurnItem({ ...assistant, updatedAt: now }).type).toBe(
+        "assistant_message",
+      );
+    }
     const known = item("item-known", "system_notice", { message: "Hello" });
     const future = item("item-future", "hologram", { beam: "ref-1" });
     const projected = (position: number, turnItem: { readonly id: string }) => ({

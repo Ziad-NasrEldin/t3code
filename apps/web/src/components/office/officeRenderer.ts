@@ -14,13 +14,11 @@ import { clone } from "three/addons/utils/SkeletonUtils.js";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { RootState } from "@react-three/fiber";
 import { createSurfaceDust, makeLifecycleMaterials } from "./officeEffects";
-import { DECK_HEIGHT } from "./officeLayout";
 import type { VisualActor, OfficeFocus } from "./OfficeScene";
 import type { OfficeStatus } from "@t3tools/client-runtime/state/office";
 import type { Life } from "./officeMotion";
 export const OFFICE_COLORS = {
   floor: 0xbbc6bb,
-  lift: 0x66b8be,
   lamp: 0xffcf82,
   selection: 0x79e0e5,
   key: 0xffe1ba,
@@ -35,6 +33,7 @@ export function createActorInstance(asset: GLTF) {
     materials: makeLifecycleMaterials(root),
     elapsed: 0,
     lifecycleNotified: false,
+    lifecycleGeneration: -1,
     lastClip: "",
     lastStatus: null as OfficeStatus | null,
     sleepTransition: 0,
@@ -45,8 +44,10 @@ export function createActorInstance(asset: GLTF) {
 export function resetActorLifecycle(
   instance: ReturnType<typeof createActorInstance>,
   transition: VisualActor["transition"],
+  generation: number,
 ) {
   instance.elapsed = 0;
+  instance.lifecycleGeneration = generation;
   instance.lifecycleNotified = false;
   if (transition !== "departing") {
     instance.dust?.points.removeFromParent();
@@ -154,10 +155,11 @@ export function advanceActorFrame(
     visual.transition !== "none" &&
     !using &&
     !instance.lifecycleNotified &&
+    instance.lifecycleGeneration === visual.generation &&
     (reduced || instance.elapsed >= (visual.transition === "arriving" ? 0.85 : 1.3))
   ) {
     instance.lifecycleNotified = true;
-    motion.finishLifecycle(life.key, visual.transition);
+    motion.finishLifecycle(life.key, visual.transition, visual.generation);
   }
   const label = labels.get(life.key);
   if (label) {
@@ -188,9 +190,8 @@ export function focusOfficeCamera(
   size: { width: number; height: number },
   invalidate: () => void,
 ) {
-  const y = focus.deck * DECK_HEIGHT;
-  controls.target.set(focus.x, y + 1, focus.z);
-  camera.position.set(focus.x + 25, y + 49, focus.z + 40);
+  controls.target.set(focus.x, 1, focus.z);
+  camera.position.set(focus.x + 25, 49, focus.z + 40);
   camera.lookAt(controls.target);
   if (camera instanceof OrthographicCamera) {
     const span = Math.max(focus.span, (focus.span * 0.75 * size.width) / size.height);

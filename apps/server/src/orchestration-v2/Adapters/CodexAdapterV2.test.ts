@@ -3312,6 +3312,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
       const messages = assistantMessages(harness.events);
       assert.strictEqual(messages.at(-1)?.message.text, expected);
+      assert.strictEqual(messages.at(-1)?.message.responseKind, "final");
       assert.strictEqual(messages.at(-1)?.message.streaming, false);
       assert.strictEqual(new Set(messages.map(({ message }) => message.id)).size, 1);
       // Image bytes stay with Codex; clients load the saved file.
@@ -3451,7 +3452,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const transcript = finalAnswerTranscript("codex-redundant-empty-final", [
+          { id: "progress", text: "Checking the files.", phase: "commentary" },
           { id: "answer-non-empty", text: "CODEX_RECOVERY_OK" },
+          { id: "answer-part-two", text: "Second final part." },
           { id: "answer-empty", text: "" },
         ]);
         const harness = yield* makeCodexReplayHarness(transcript);
@@ -3470,7 +3473,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
-          ["CODEX_RECOVERY_OK"],
+          ["Checking the files.", "CODEX_RECOVERY_OK", "Second final part."],
+        );
+        assert.deepEqual(
+          assistantMessages(harness.events).map((event) => event.message.responseKind),
+          ["commentary", "final", "final"],
+        );
+        const items = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "assistant_message" &&
+          !event.turnItem.streaming
+            ? [event.turnItem]
+            : [],
+        );
+        assert.deepEqual(
+          items.map((item) => item.responseKind),
+          ["commentary", "final", "final"],
         );
       }).pipe(
         Effect.provide(

@@ -68,7 +68,7 @@ import { OfficeAudio, readOfficePreferences, type OfficePreferences } from "./of
 import { OfficeMotion, type Amenity } from "./officeMotion";
 import { useOfficeData } from "./useOfficeData";
 import { useOfficeWorld } from "./useOfficeWorld";
-import { DECK_HEIGHT } from "./officeLayout";
+import { projectRoomKey } from "./officeLayout";
 import type { OfficeFocus } from "./OfficeScene";
 import { cn } from "../../lib/utils";
 
@@ -375,7 +375,7 @@ function OfficeFloor({
     [lamp, setLamp] = useState(true),
     [notice, setNotice] = useState<string | null>(null),
     [metrics, setMetrics] = useState("Graphics loading…");
-  const [focus, setFocus] = useState<OfficeFocus>({ x: 0, z: 0, deck: 0, span: 54, serial: 0 });
+  const [focus, setFocus] = useState<OfficeFocus>({ x: 0, z: 0, span: 54, serial: 0 });
   const systemReduced = useMediaQuery("(prefers-reduced-motion: reduce)"),
     reduced = systemReduced || prefs.reducedMotion;
   const directoryRef = useRef<HTMLInputElement>(null);
@@ -385,12 +385,14 @@ function OfficeFloor({
     setSelected(key);
     const life = motion.lives.get(key),
       entry = world.actors.find((v) => v.actor.key === key),
-      room = world.rooms.find((room) => room.id === entry?.actor.projectId);
+      room = world.rooms.find(
+        (room) =>
+          room.id === (entry ? projectRoomKey(entry.actor.projectId, world.slots[key] ?? 0) : null),
+      );
     if (life)
       setFocus({
         x: life.position.x,
         z: life.position.z,
-        deck: Math.max(0, Math.round((life.position.y - 0.07) / DECK_HEIGHT)),
         span: 19,
         serial: focus.serial + 1,
       });
@@ -398,7 +400,6 @@ function OfficeFloor({
       setFocus({
         x: room.site.x,
         z: room.site.z,
-        deck: Math.floor((world.slots[key] ?? 0) / 2),
         span: 19,
         serial: focus.serial + 1,
       });
@@ -427,7 +428,10 @@ function OfficeFloor({
       );
       return;
     }
-    if (projectId && actor?.projectId !== projectId) {
+    if (
+      projectId &&
+      (!actor || projectRoomKey(actor.projectId, world.slots[actor.key] ?? 0) !== projectId)
+    ) {
       setNotice("Select an agent in this project before using its keyboard.");
       return;
     }
@@ -493,6 +497,7 @@ function OfficeFloor({
             actors={world.actors}
             rooms={world.rooms}
             slots={world.slots}
+            rests={world.rests}
             motion={motion}
             focus={focus}
             selected={selected}
@@ -590,7 +595,6 @@ function OfficeFloor({
                     setFocus({
                       x: room.site.x,
                       z: room.site.z,
-                      deck: focus.deck,
                       span: 18,
                       serial: focus.serial + 1,
                     })
@@ -598,7 +602,13 @@ function OfficeFloor({
                 >
                   <span className="truncate">{room.title}</span>
                   <span className="text-2xs text-muted-foreground">
-                    {data.actors.filter((actor) => actor.projectId === room.id).length}
+                    {room.projectId === null
+                      ? "Rest terrace"
+                      : data.actors.filter(
+                          (actor) =>
+                            projectRoomKey(actor.projectId, world.slots[actor.key] ?? 0) ===
+                            room.id,
+                        ).length}
                   </span>
                 </Button>
               </div>
@@ -608,7 +618,7 @@ function OfficeFloor({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => setFocus({ x: 0, z: 0, deck: 0, span: 54, serial: focus.serial + 1 })}
+            onClick={() => setFocus({ x: 0, z: 0, span: 54, serial: focus.serial + 1 })}
           >
             <MapIcon />
             Overview
@@ -620,21 +630,6 @@ function OfficeFloor({
           <Button variant="ghost" size="sm" onClick={() => setDirectory(!directory)}>
             <SearchIcon />
             Directory
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={focus.deck === 0}
-            onClick={() => setFocus({ ...focus, deck: focus.deck - 1, serial: focus.serial + 1 })}
-          >
-            Lower deck
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setFocus({ ...focus, deck: focus.deck + 1, serial: focus.serial + 1 })}
-          >
-            Deck {focus.deck + 1} · next
           </Button>
         </div>
         <div
@@ -837,9 +832,12 @@ function OfficeFloor({
             </div>
           ) : null}
           <p className="border-t p-3 text-2xs text-muted-foreground">
-            Rooms keep their sites as the office grows. Crowded projects use inspectable decks.
-            Completed children remain on their project floor; closure history can be unavailable on
-            some providers.
+            Rooms keep their sites as the office grows. Crowded projects extend into rooms on the
+            same floor. Lobby rest terraces share the central amenities. Showing up to{" "}
+            {prefs.quality === "low" ? 8 : 16} agents and 24 rooms or terraces at a time; the
+            directory lists all {data.actors.length} occupants. Select anyone to focus their
+            location. Completed children remain on their project floor; closure history can be
+            unavailable on some providers.
           </p>
         </aside>
       ) : null}

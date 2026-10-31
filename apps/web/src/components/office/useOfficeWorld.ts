@@ -1,18 +1,18 @@
 import * as DateTime from "effect/DateTime";
 import { useEffect, useState } from "react";
 import type { OfficeActor } from "@t3tools/client-runtime/state/office";
-import { allocateStable, projectVariant, siteAt } from "./officeLayout";
-import type { SceneRoom, VisualActor } from "./OfficeScene";
+import { completeActor, completeRoom, reconcileWorld, type World } from "./officeWorld";
 import type { OfficeMotion } from "./officeMotion";
 
 function readAssignments(key: string): {
   sites: Record<string, number>;
   actors: Record<string, number>;
+  rests: Record<string, number>;
 } {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(key) ?? "{}");
-    if (typeof value !== "object" || value === null) return { sites: {}, actors: {} };
-    const raw = value as { sites?: unknown; actors?: unknown };
+    if (typeof value !== "object" || value === null) return { sites: {}, actors: {}, rests: {} };
+    const raw = value as { sites?: unknown; actors?: unknown; rests?: unknown };
     const numbers = (input: unknown) =>
       typeof input === "object" && input !== null
         ? Object.fromEntries(
@@ -21,20 +21,10 @@ function readAssignments(key: string): {
             ),
           )
         : {};
-    return { sites: numbers(raw.sites), actors: numbers(raw.actors) };
+    return { sites: numbers(raw.sites), actors: numbers(raw.actors), rests: numbers(raw.rests) };
   } catch {
-    return { sites: {}, actors: {} };
+    return { sites: {}, actors: {}, rests: {} };
   }
-}
-interface World {
-  readonly signature: string;
-  readonly actors: ReadonlyArray<VisualActor>;
-  readonly rooms: ReadonlyArray<SceneRoom>;
-  readonly slots: Record<string, number>;
-  readonly sites: Record<string, number>;
-  readonly online: boolean;
-  readonly restored: boolean;
-  readonly visible: boolean;
 }
 export function useOfficeWorld(
   environmentId: string,
@@ -62,116 +52,32 @@ export function useOfficeWorld(
     rooms: [],
     slots: saved.actors,
     sites: saved.sites,
+    rests: saved.rests,
+    generation: 0,
     online: false,
     restored: false,
     visible,
   });
   if (world.signature !== signature) {
-    const current = new Map(actors.map((actor) => [actor.key, actor]));
-    const entries: VisualActor[] = world.actors.flatMap<VisualActor>((visual) => {
-      const next = current.get(visual.actor.key);
-      if (next) {
-        current.delete(next.key);
-        return [
-          {
-            actor: next,
-            transition: visual.transition === "departing" ? "none" : visual.transition,
-          },
-        ];
-      }
-      if (!online) return [{ ...visual, actor: { ...visual.actor, status: "offline" as const } }];
-      return world.online && world.visible && visible
-        ? [{ ...visual, transition: "departing" as const }]
-        : [];
-    });
-    for (const actor of current.values())
-      entries.push({
-        actor,
-        transition:
-          world.restored && world.online && online && world.visible && visible
-            ? "arriving"
-            : "none",
-      });
-    const projectIds = [...new Set(entries.map((visual) => visual.actor.projectId))];
-    const roomIds = [...new Set([...world.rooms.map((room) => room.id), ...projectIds])];
-    const sites = allocateStable(world.sites, roomIds);
-    const rooms = roomIds.map((id) => {
-      const prior = world.rooms.find((room) => room.id === id);
-      return {
-        id,
-        title: titles.get(id) ?? prior?.title ?? "Project",
-        site: siteAt(sites[id]!),
-        variant: projectVariant(id),
-        deck: 0,
-        attaching: prior?.attaching ?? (world.restored && world.online && online),
-        removing: !projectIds.includes(id as OfficeActor["projectId"]),
-      };
-    });
-    const slots: Record<string, number> = {};
-    for (const id of projectIds) {
-      const keys = entries
-        .filter((visual) => visual.actor.projectId === id)
-        .map((visual) => visual.actor.key);
-      const occupied = new Set<number>();
-      for (const key of keys) {
-        const actor = entries.find((entry) => entry.actor.key === key)!.actor;
-        const prior = world.slots[key];
-        if (prior !== undefined && prior % 2 === (actor.child ? 1 : 0) && !occupied.has(prior)) {
-          slots[key] = prior;
-          occupied.add(prior);
-        }
-      }
-      for (const key of keys) {
-        if (slots[key] !== undefined) continue;
-        const actor = entries.find((entry) => entry.actor.key === key)!.actor;
-        let slot = actor.child ? 1 : 0;
-        while (occupied.has(slot)) slot += 2;
-        slots[key] = slot;
-        occupied.add(slot);
-      }
-    }
-    setWorld({
-      signature,
-      actors: entries,
-      rooms,
-      slots,
-      sites,
-      online,
-      restored: world.restored || loaded,
-      visible,
-    });
+    setWorld(reconcileWorld(world, actors, titles, online, loaded, visible, signature));
   }
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes one completion boundary per rendered lifecycle effect, allowing slow asset loads and safe item recovery before removal
   useEffect(
     () =>
-      motion.subscribeLifecycle((key, transition) =>
-        setWorld((previous) => {
-          const nextActors = previous.actors.flatMap((entry) =>
-            entry.actor.key !== key || entry.transition !== transition
-              ? [entry]
-              : transition === "departing"
-                ? []
-                : [{ ...entry, transition: "none" as const }],
-          );
-          return {
-            ...previous,
-            actors: nextActors,
-            rooms: previous.rooms.map((room) => ({
-              ...room,
-              removing: !nextActors.some((entry) => entry.actor.projectId === room.id),
-            })),
-          };
-        }),
+      motion.subscribeLifecycle((key, transition, generation) =>
+        setWorld((previous) => completeActor(previous, key, transition, generation)),
       ),
     [motion],
   );
   const transitions = [
     ...world.actors
       .filter((visual) => visual.transition !== "none")
-      .map((visual) => `actor:${visual.actor.key}:${visual.transition}`),
+      .map((visual) => `actor:${visual.actor.key}:${visual.transition}:${visual.generation}`),
     ...world.rooms
       .filter((room) => room.attaching || room.removing)
-      .map((room) => `room:${room.id}:${room.removing ? "removing" : "attaching"}`),
+      .map(
+        (room) => `room:${room.id}:${room.removing ? "removing" : "attaching"}:${room.generation}`,
+      ),
   ];
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- completes only retained cosmetic transitions; membership changes themselves come from the authoritative office inventory
   useEffect(() => {
@@ -183,51 +89,30 @@ export function useOfficeWorld(
       }
     for (const visual of world.actors) {
       if (visual.transition === "none") continue;
-      const id = `actor:${visual.actor.key}:${visual.transition}`;
+      const id = `actor:${visual.actor.key}:${visual.transition}:${visual.generation}`;
       if (timers.has(id)) continue;
       const duration = 20_000;
       timers.set(
         id,
         setTimeout(() => {
           timers.delete(id);
-          setWorld((previous) => {
-            const nextActors = previous.actors.flatMap((entry) =>
-              entry.actor.key !== visual.actor.key || entry.transition !== visual.transition
-                ? [entry]
-                : entry.transition === "departing"
-                  ? []
-                  : [{ ...entry, transition: "none" as const }],
-            );
-            return {
-              ...previous,
-              actors: nextActors,
-              rooms: previous.rooms.map((room) => ({
-                ...room,
-                removing: !nextActors.some((entry) => entry.actor.projectId === room.id),
-              })),
-            };
-          });
+          setWorld((previous) =>
+            completeActor(previous, visual.actor.key, visual.transition, visual.generation),
+          );
         }, duration),
       );
     }
     for (const room of world.rooms) {
       if (!room.attaching && !room.removing) continue;
-      const id = `room:${room.id}:${room.removing ? "removing" : "attaching"}`;
+      const id = `room:${room.id}:${room.removing ? "removing" : "attaching"}:${room.generation}`;
       if (timers.has(id)) continue;
       timers.set(
         id,
         setTimeout(() => {
           timers.delete(id);
-          setWorld((previous) => ({
-            ...previous,
-            rooms: previous.rooms.flatMap((entry) =>
-              entry.id !== room.id
-                ? [entry]
-                : entry.removing
-                  ? []
-                  : [{ ...entry, attaching: false }],
-            ),
-          }));
+          setWorld((previous) =>
+            completeRoom(previous, room.id, room.removing === true, room.generation),
+          );
         }, 800),
       );
     }
@@ -235,11 +120,14 @@ export function useOfficeWorld(
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- persists client-local placement identities without thread content or server execution state
   useEffect(() => {
     try {
-      localStorage.setItem(storageKey, JSON.stringify({ sites: world.sites, actors: world.slots }));
+      localStorage.setItem(
+        storageKey,
+        JSON.stringify({ sites: world.sites, actors: world.slots, rests: world.rests }),
+      );
     } catch {
       /* Storage exhaustion does not block chat. */
     }
-  }, [storageKey, world.sites, world.slots]);
+  }, [storageKey, world.sites, world.slots, world.rests]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- clears only this office's animation deadlines on teardown
   useEffect(
     () => () => {

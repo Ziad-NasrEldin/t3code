@@ -1124,6 +1124,7 @@ describe("native provider presentation in the v2 timeline", () => {
       type: "assistant_message",
       messageId: MessageId.make("done"),
       text: "Done",
+      responseKind: "final",
       streaming: false,
     };
     const checkpoint: OrchestrationV2TurnItem = {
@@ -1139,6 +1140,7 @@ describe("native provider presentation in the v2 timeline", () => {
       optimisticMessages: [],
     });
     expect(entries.map((entry) => entry.kind)).toEqual(["message"]);
+    expect(entries[0]).toMatchObject({ message: { responseKind: "final", text: "Done" } });
     const rows = deriveMessagesTimelineRows({
       timelineEntries: entries,
       latestRun: {

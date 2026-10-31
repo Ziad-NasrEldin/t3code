@@ -3313,13 +3313,6 @@ export default function ChatView(props: ChatViewProps) {
             >
               <ThreadTimeline
                 clean={cleanTranscript}
-                completedRunIds={
-                  cleanTranscript
-                    ? (serverProjection?.runs ?? [])
-                        .filter((run) => run.status === "completed")
-                        .map((run) => run.id)
-                    : []
-                }
                 pendingApprovals={pendingApprovals}
                 heldApprovalRequestIds={heldApprovalRequestIds}
                 respondingRequestIds={respondingRequestIds}

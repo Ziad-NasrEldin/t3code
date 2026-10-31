@@ -7,9 +7,15 @@ export interface RoomSite {
   readonly z: number;
   readonly side: "north" | "east" | "south" | "west";
 }
-export const DECK_HEIGHT = 7;
-export const ROOM_CAPACITY = 2;
-export const LOBBY_CAPACITY = 2;
+// Each module has two clear berths. More occupants get another site on this same floor.
+export const MODULE_BERTHS = 2;
+export function projectRoomKey(projectId: string, slot: number): string {
+  const module = Math.floor(slot / MODULE_BERTHS);
+  return module === 0 ? projectId : `extension:${projectId}:${module}`;
+}
+export function restAreaKey(slot: number): string | null {
+  return slot < 1 ? null : `common:${Math.floor((slot - 1) / MODULE_BERTHS)}`;
+}
 export function ringSize(ring: number): Point {
   return [9.5 + ring * 18, 8.5 + ring * 18];
 }
@@ -89,9 +95,9 @@ export function roomLocal(site: RoomSite, variant: RoomVariant, point: Point): P
   return [x * Math.cos(a) - z * Math.sin(a), x * Math.sin(a) + z * Math.cos(a)];
 }
 export function homePoint(site: RoomSite, variant: RoomVariant, slot: number): Point {
-  return roomPoint(site, variant, slot % 2 === 0 ? [-2.5, 4] : [3.5, 3.75]);
+  return roomPoint(site, variant, slot % 2 === 0 ? [-2.5, 3.75] : [3, 3.5]);
 }
-function roomDoor(site: RoomSite): Point {
+export function roomDoor(site: RoomSite): Point {
   const [x, z] = ringSize(site.ring);
   if (site.side === "north") return [site.x, -z];
   if (site.side === "south") return [site.x, z];
@@ -131,9 +137,9 @@ export function findPath(
   end: Point,
   obstacles: ReadonlyArray<Obstacle>,
   bounds: readonly [number, number, number, number],
-  radius = 0.95,
+  radius: number | { side: number; back: number; front: number } = 0.95,
 ): ReadonlyArray<Point> | null {
-  const step = 0.5,
+  const step = 0.25,
     key = (x: number, z: number) => `${x},${z}`,
     cell = (p: Point) => [Math.round(p[0] / step), Math.round(p[1] / step)] as const;
   const source = cell(start),
@@ -170,7 +176,25 @@ export function findPath(
         p[0] > bounds[2] ||
         p[1] < bounds[1] ||
         p[1] > bounds[3] ||
-        obstacles.some((box) => intersects(p, box, radius))
+        obstacles.some((box) => {
+          if (typeof radius === "number") return intersects(p, box, radius);
+          const offset: Obstacle =
+            dx === 1
+              ? { min: [-radius.back, -radius.side], max: [radius.front, radius.side] }
+              : dx === -1
+                ? { min: [-radius.front, -radius.side], max: [radius.back, radius.side] }
+                : dz === 1
+                  ? { min: [-radius.side, -radius.back], max: [radius.side, radius.front] }
+                  : { min: [-radius.side, -radius.front], max: [radius.side, radius.back] };
+          const source = [at[0] * step, at[1] * step] as Point;
+          return [source, p].some(
+            (point) =>
+              point[0] + offset.min[0] < box.max[0] &&
+              point[0] + offset.max[0] > box.min[0] &&
+              point[1] + offset.min[1] < box.max[1] &&
+              point[1] + offset.max[1] > box.min[1],
+          );
+        })
       )
         continue;
       prior.set(k, atKey);

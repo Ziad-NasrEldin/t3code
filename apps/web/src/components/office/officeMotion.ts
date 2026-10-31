@@ -1,11 +1,9 @@
 import type { OfficeActor, OfficeStatus } from "@t3tools/client-runtime/state/office";
 import { Vector3 } from "three";
+import bodyBounds from "./bodyBounds.json";
 import performanceBounds from "./performanceBounds.json";
 import rawObstacles from "./obstacles.json";
 import {
-  DECK_HEIGHT,
-  ROOM_CAPACITY,
-  LOBBY_CAPACITY,
   roomRotation,
   findPath,
   homePoint,
@@ -15,6 +13,7 @@ import {
   type Point,
   type RoomSite,
   type RoomVariant,
+  type Obstacle,
 } from "./officeLayout";
 
 const boxes = (items: ReadonlyArray<{ min: ReadonlyArray<number>; max: ReadonlyArray<number> }>) =>
@@ -60,17 +59,14 @@ export const PERFORMANCES = {
     offset: [0, 0] as Point,
   },
 } as const;
-const LOBBY_SPOTS: ReadonlyArray<Point> = [
-  [0, 3],
-  [0.5, -2.5],
-];
+const LOBBY_SPOTS: ReadonlyArray<Point> = [[0, 3.5]];
 export interface Life {
   readonly key: string;
   actor: OfficeActor;
   readonly site: RoomSite;
   readonly variant: RoomVariant;
-  readonly homeDeck: number;
-  lobbyDeck: number;
+  readonly restSite: RoomSite | null;
+  readonly restSlot: number;
   readonly home: Vector3;
   readonly rest: Vector3;
   readonly position: Vector3;
@@ -91,43 +87,44 @@ export interface Life {
   departing: boolean;
   automaticVisitRunId: string | null;
 }
-function vector(p: Point, deck: number) {
-  return new Vector3(p[0], deck * DECK_HEIGHT + 0.07, p[1]);
+function vector(p: Point) {
+  return new Vector3(p[0], 0.07, p[1]);
 }
 function localDoor(variant: RoomVariant): Point {
   return variant === "grove" ? [5.5, 0] : variant === "prism" ? [-5.5, 0] : [0, 5.5];
 }
 function localHome(slot: number): Point {
-  return slot % 2 === 0 ? [-2.5, 4] : [3.5, 3.75];
+  return slot % 2 === 0 ? [-2.5, 3.75] : [3, 3.5];
 }
-function pathsToWorld(
-  path: ReadonlyArray<Point>,
-  site: RoomSite,
-  variant: RoomVariant,
-  deck: number,
-) {
-  return path.map((p) => vector(roomPoint(site, variant, p), deck));
+function pathsToWorld(path: ReadonlyArray<Point>, site: RoomSite, variant: RoomVariant) {
+  return path.map((p) => vector(roomPoint(site, variant, p)));
 }
+const exitPaths = new Map<string, ReadonlyArray<Point> | null>();
 function roomExit(
   site: RoomSite,
   variant: RoomVariant,
   slot: number,
-  deck: number,
   start: Point = localHome(slot),
 ) {
-  const path = findPath(
-    start,
-    localDoor(variant),
-    obstacles[variant] as ReadonlyArray<{ min: Point; max: Point }>,
-    [-6, -5.5, 6, 5.5],
-    0.7,
-  );
-  return path === null ? null : pathsToWorld(path, site, variant, deck);
+  const key = `${variant}:${slot % 2}`;
+  const home = localHome(slot);
+  const cacheable = start[0] === home[0] && start[1] === home[1];
+  const path =
+    cacheable && exitPaths.has(key)
+      ? exitPaths.get(key)!
+      : findPath(
+          start,
+          localDoor(variant),
+          obstacles[variant] as ReadonlyArray<{ min: Point; max: Point }>,
+          [-6, -5.5, 6, 5.5],
+          slot % 2 === 0 ? bodyBounds.main.walk : bodyBounds.child.walk,
+        );
+  if (cacheable) exitPaths.set(key, path);
+  return path === null ? null : pathsToWorld(path, site, variant);
 }
 function lobbyPath(
   start: Point,
   end: Point,
-  deck: number,
   child = false,
   restPoints: ReadonlyArray<Point> = LOBBY_SPOTS,
 ) {
@@ -138,31 +135,53 @@ function lobbyPath(
         Math.hypot(p[0] - end[0], p[1] - end[1]) > 2.1,
     )
     .map((p) => ({
-      min: [p[0] - 1.2, p[1] - 1.2] as Point,
-      max: [p[0] + 1.2, p[1] + 1.2] as Point,
+      min: [p[0] + bodyBounds.main.min[0]!, p[1] + bodyBounds.main.min[1]!] as Point,
+      max: [p[0] + bodyBounds.main.max[0]!, p[1] + bodyBounds.main.max[1]!] as Point,
     }));
   const path = findPath(
     start,
     end,
     [...obstacles.lobby, ...reserved],
     [-7.8, -6.8, 10, 8.5],
-    child ? 0.7 : 0.85,
+    child ? bodyBounds.child.walk : bodyBounds.main.walk,
   );
-  return path?.map((p) => vector(p, deck)) ?? null;
+  return path?.map((p) => vector(p)) ?? null;
+}
+export function lifeBodyBox(
+  life: Life,
+  position = life.position,
+  heading = life.heading,
+): Obstacle {
+  const source = bodyBounds[life.actor.child ? "child" : "main"];
+  const b =
+    life.route.length > 0
+      ? { min: [-source.walk.side, -source.walk.back], max: [source.walk.side, source.walk.front] }
+      : source;
+  const points = [b.min, [b.min[0]!, b.max[1]!], b.max, [b.max[0]!, b.min[1]!]];
+  const c = Math.cos(heading),
+    s = Math.sin(heading);
+  const x = points.map((p) => position.x + p[0]! * c + p[1]! * s);
+  const z = points.map((p) => position.z - p[0]! * s + p[1]! * c);
+  return { min: [Math.min(...x), Math.min(...z)], max: [Math.max(...x), Math.max(...z)] };
+}
+export function boxesOverlap(a: Obstacle, b: Obstacle): boolean {
+  return a.min[0] < b.max[0] && a.max[0] > b.min[0] && a.min[1] < b.max[1] && a.max[1] > b.min[1];
 }
 export class OfficeMotion {
   readonly lives = new Map<string, Life>();
   private readonly lifecycleListeners = new Set<
-    (key: string, transition: "arriving" | "departing") => void
+    (key: string, transition: "arriving" | "departing", generation: number) => void
   >();
-  subscribeLifecycle(listener: (key: string, transition: "arriving" | "departing") => void) {
+  subscribeLifecycle(
+    listener: (key: string, transition: "arriving" | "departing", generation: number) => void,
+  ) {
     this.lifecycleListeners.add(listener);
     return () => {
       this.lifecycleListeners.delete(listener);
     };
   }
-  finishLifecycle(key: string, transition: "arriving" | "departing") {
-    for (const listener of this.lifecycleListeners) listener(key, transition);
+  finishLifecycle(key: string, transition: "arriving" | "departing", generation: number) {
+    for (const listener of this.lifecycleListeners) listener(key, transition, generation);
   }
 
   private graphicsWake: () => void = () => {};
@@ -197,7 +216,6 @@ export class OfficeMotion {
   }
   readonly reservations = new Map<string, string>();
   private readonly slots = new Map<string, number>();
-  private readonly lobbySlots = new Map<string, number>();
   private readonly itemCells = new Map<string, { owner: string; cells: Set<string> }>();
   private trafficVersion = 0;
   setDeparture(key: string, departing: boolean) {
@@ -215,11 +233,11 @@ export class OfficeMotion {
       this.update(life.actor);
     }
   }
-  private cellsForItem(life: Life, amenity: Amenity, deck: number) {
+  private cellsForItem(life: Life, amenity: Amenity) {
     const b = performanceBounds[amenity],
       localCorners = [
-        [b[0]! - 1, b[1]! - 1],
-        [b[2]! + 1, b[3]! + 1],
+        [b[0]! - 0.1, b[1]! - 0.1],
+        [b[2]! + 0.1, b[3]! + 0.1],
       ] as const;
     const corners =
       amenity === "keyboard"
@@ -232,7 +250,7 @@ export class OfficeMotion {
     const cells = new Set<string>();
     for (let x = Math.floor(minX * 2); x <= Math.ceil(maxX * 2); x++)
       for (let z = Math.floor(minZ * 2); z <= Math.ceil(maxZ * 2); z++)
-        for (let dy = 0; dy <= 1; dy++) cells.add(`${x}:${deck * 2 + dy}:${z}`);
+        for (let dy = 0; dy <= 1; dy++) cells.add(`${x}:${dy}:${z}`);
     return cells;
   }
 
@@ -242,15 +260,6 @@ export class OfficeMotion {
     { cells: Set<string>; iterator: Generator<string>; version: number }
   >();
   private pathBuildBudget = 0;
-  private allocateLobby(key: string) {
-    const prior = this.lobbySlots.get(key);
-    if (prior !== undefined) return prior;
-    const used = new Set(this.lobbySlots.values());
-    let slot = 0;
-    while (used.has(slot)) slot++;
-    this.lobbySlots.set(key, slot);
-    return slot;
-  }
   private releaseTraffic(life: Life) {
     for (const cell of life.traffic ?? [])
       if (this.trafficOwners.get(cell) === life.key) this.trafficOwners.delete(cell);
@@ -311,29 +320,48 @@ export class OfficeMotion {
           x = Math.round(at.x * 2),
           z = Math.round(at.z * 2),
           y = Math.floor(at.y / 3.5);
-        for (let dx = -2; dx <= 2; dx++)
-          for (let dz = -2; dz <= 2; dz++)
+        for (let dx = -3; dx <= 3; dx++)
+          for (let dz = -3; dz <= 3; dz++)
             for (let dy = 0; dy <= 1; dy++) yield `${x + dx}:${y + dy}:${z + dz}`;
       }
     }
   }
-  add(actor: OfficeActor, site: RoomSite, variant: RoomVariant, slot: number): Life {
+  add(
+    actor: OfficeActor,
+    site: RoomSite,
+    variant: RoomVariant,
+    slot: number,
+    restBerth: { site: RoomSite | null; slot: number },
+  ): Life {
     const existing = this.lives.get(actor.key);
-    if (existing && existing.actor.projectId !== actor.projectId) this.remove(actor.key);
-    else if (existing) return existing;
+    if (existing) {
+      if (
+        existing.actor.projectId === actor.projectId &&
+        existing.site.index === site.index &&
+        existing.variant === variant &&
+        this.slots.get(actor.key) === slot &&
+        existing.restSite?.index === restBerth.site?.index &&
+        existing.restSlot === restBerth.slot
+      )
+        return existing;
+      // Reconciliation can skip the absent snapshot of a completed departure. Its old
+      // cosmetic life must not occupy a berth already reassigned to someone else.
+      this.remove(actor.key);
+    }
     this.slots.set(actor.key, slot);
-    const lobbySlot = actor.child ? 0 : this.allocateLobby(actor.key);
-    const homeDeck = Math.floor(slot / ROOM_CAPACITY),
-      lobbyDeck = Math.floor(lobbySlot / LOBBY_CAPACITY),
-      home = vector(homePoint(site, variant, slot), homeDeck),
-      rest = vector(LOBBY_SPOTS[lobbySlot % LOBBY_SPOTS.length]!, lobbyDeck);
+    const home = vector(homePoint(site, variant, slot)),
+      rest = vector(
+        restBerth.site
+          ? roomPoint(restBerth.site, "atlas", restBerth.slot % 2 === 0 ? [-3.75, 0] : [3.75, 0])
+          : LOBBY_SPOTS[0]!,
+      );
     const life: Life = {
       key: actor.key,
       actor,
       site,
       variant,
-      homeDeck,
-      lobbyDeck,
+      restSite: restBerth.site,
+      restSlot: restBerth.slot,
       home,
       rest,
       position: home.clone(),
@@ -364,7 +392,6 @@ export class OfficeMotion {
     if (life) this.releaseTraffic(life);
     this.lives.delete(key);
     this.slots.delete(key);
-    this.lobbySlots.delete(key);
     for (const [item, entry] of this.itemCells)
       if (entry.owner === key) this.itemCells.delete(item);
     this.trafficVersion++;
@@ -405,100 +432,107 @@ export class OfficeMotion {
   }
   private occupiedLobbyPoints(life: Life): ReadonlyArray<Point> {
     return [...this.lives.values()]
-      .filter(
-        (other) =>
-          other !== life &&
-          other.lobbyDeck === life.lobbyDeck &&
-          other.position.distanceTo(other.rest) < 0.2,
-      )
+      .filter((other) => other !== life && other.position.distanceTo(other.rest) < 0.2)
       .map((other) => [other.rest.x, other.rest.z] as Point);
+  }
+  private homeRoute(life: Life) {
+    const exit = roomExit(life.site, life.variant, this.slots.get(life.key) ?? 0);
+    return exit ? [...exit, ...routeToLobby(life.site).map((p) => vector(p))] : null;
+  }
+  private restRoute(life: Life) {
+    if (!life.restSite) return lobbyPath([life.rest.x, life.rest.z], [7, 0]);
+    const local: Point = life.restSlot % 2 === 0 ? [-3.75, 0] : [3.75, 0];
+    return [
+      ...[local, [0, 0], [0, 5.5]].map((p) =>
+        vector(roomPoint(life.restSite!, "atlas", p as Point)),
+      ),
+      ...routeToLobby(life.restSite).map((p) => vector(p)),
+    ];
   }
   private travel(life: Life, destination: "home" | "lobby") {
     this.releaseTraffic(life);
     life.destination = destination;
-    const slot = this.slots.get(life.key) ?? 0,
-      local = roomLocal(life.site, life.variant, [life.position.x, life.position.z]),
-      inRoom =
-        Math.abs(local[0]) < 6 &&
-        Math.abs(local[1]) < 5.5 &&
-        Math.abs(life.position.y - life.home.y) < 0.1;
-    if (destination === "home" && inRoom) {
-      const path = findPath(
-        local,
-        localHome(slot),
-        obstacles[life.variant],
-        [-6, -5.5, 6, 5.5],
-        0.7,
-      );
-      if (path) {
-        life.route.splice(
-          0,
-          life.route.length,
-          ...pathsToWorld(path, life.site, life.variant, life.homeDeck),
-        );
-        life.phase = "walking";
-        life.routeBlocked = false;
-      }
-      return;
-    }
-    const exit = roomExit(
-      life.site,
-      life.variant,
-      slot,
-      life.homeDeck,
-      inRoom ? local : localHome(slot),
-    );
-    const entry = lobbyPath(
-      [7, 0],
-      life.requested && life.requested !== "keyboard"
-        ? PERFORMANCES[life.requested].start
-        : LOBBY_SPOTS[(this.lobbySlots.get(life.key) ?? 0) % LOBBY_SPOTS.length]!,
-      life.lobbyDeck,
-      life.actor.child,
-      life.requested ? this.occupiedLobbyPoints(life) : LOBBY_SPOTS,
-    );
-    if (!exit || !entry) {
+    const homeRoute = this.homeRoute(life),
+      restRoute = this.restRoute(life);
+    if (!homeRoute || !restRoute) {
       life.routeBlocked = true;
       return;
     }
-    const shared = routeToLobby(life.site).map((p) => vector(p, life.homeDeck));
-    const lift = vector([9.5, 8.5], life.lobbyDeck);
-    const lobbyLink = [lift, vector([9.5, 0], life.lobbyDeck), vector([7, 0], life.lobbyDeck)];
-    // The corner shaft keeps deck changes outside every removable room.
-    const corner = shared.findIndex((p) => p.x === 9.5 && p.z === 8.5);
-    const forward = [
-      ...exit,
-      ...(corner < 0 ? shared : shared.slice(0, corner + 1)),
-      ...lobbyLink,
-      ...entry,
-      ...(life.requested && life.requested !== "keyboard" ? [] : [life.rest.clone()]),
-    ];
-    let path = destination === "lobby" ? forward : forward.toReversed();
-    if (
-      destination === "home" &&
-      life.position.distanceTo(life.rest) < 10 &&
-      Math.abs(life.position.y - life.rest.y) < 0.1
-    ) {
-      const fromLobby = lobbyPath([life.position.x, life.position.z], [7, 0], life.lobbyDeck);
-      if (fromLobby)
-        path = [
-          ...fromLobby,
-          ...lobbyLink.toReversed(),
-          ...(corner < 0 ? shared : shared.slice(0, corner + 1)).toReversed(),
-          ...exit.toReversed(),
-          life.home.clone(),
-        ];
+    const local = roomLocal(life.site, life.variant, [life.position.x, life.position.z]);
+    const inRoom = Math.abs(local[0]) < 6 && Math.abs(local[1]) < 5.5;
+    const visiting = life.requested !== null && life.requested !== "keyboard";
+    const fromPortal =
+      destination === "home"
+        ? homeRoute.toReversed()
+        : visiting
+          ? lobbyPath(
+              [7, 0],
+              PERFORMANCES[life.requested!].start,
+              life.actor.child,
+              this.occupiedLobbyPoints(life),
+            )
+          : restRoute.toReversed();
+    if (!fromPortal) {
+      life.routeBlocked = true;
+      return;
     }
-    let nearest = 0,
-      best = Number.POSITIVE_INFINITY;
-    for (let i = 0; i < path.length; i++) {
-      const d = path[i]!.distanceToSquared(life.position);
-      if (d < best) {
-        best = d;
-        nearest = i;
+    let path: Vector3[];
+    if (inRoom) {
+      const target =
+        destination === "home" ? localHome(this.slots.get(life.key) ?? 0) : localDoor(life.variant);
+      const inside = findPath(
+        local,
+        target,
+        obstacles[life.variant],
+        [-6, -5.5, 6, 5.5],
+        life.actor.child ? bodyBounds.child.walk : bodyBounds.main.walk,
+      );
+      if (!inside) {
+        life.routeBlocked = true;
+        return;
       }
+      path = [
+        ...pathsToWorld(inside, life.site, life.variant),
+        ...(destination === "home"
+          ? []
+          : [...routeToLobby(life.site).map((p) => vector(p)), ...fromPortal]),
+      ];
+    } else if (Math.abs(life.position.x) <= 8 && Math.abs(life.position.z) <= 7) {
+      const inside = lobbyPath(
+        [life.position.x, life.position.z],
+        [7, 0],
+        life.actor.child,
+        this.occupiedLobbyPoints(life),
+      );
+      if (!inside) {
+        life.routeBlocked = true;
+        return;
+      }
+      path = [...inside, ...fromPortal];
+    } else {
+      // Project onto the current cleared segment before reversing. A nearest-vertex
+      // shortcut can jump to a nearby parallel corridor through a room or its furniture.
+      let best = Infinity;
+      path = [];
+      for (const candidate of [homeRoute, restRoute])
+        for (let i = 1; i < candidate.length; i++) {
+          const a = candidate[i - 1]!,
+            b = candidate[i]!;
+          const direction = b.clone().sub(a);
+          const length = direction.lengthSq();
+          const t =
+            length === 0
+              ? 0
+              : Math.max(0, Math.min(1, life.position.clone().sub(a).dot(direction) / length));
+          const at = a.clone().lerp(b, t);
+          const distance = at.distanceToSquared(life.position);
+          if (distance < best) {
+            best = distance;
+            path = [at, ...candidate.slice(i), ...fromPortal];
+          }
+        }
     }
-    life.route.splice(0, life.route.length, ...path.slice(nearest));
+    life.route.splice(0, life.route.length, ...path);
     life.phase = "walking";
     life.routeBlocked = false;
   }
@@ -526,16 +560,10 @@ export class OfficeMotion {
     if (amenity === "keyboard" && life.variant !== "grove")
       return "The contact keyboard is in a workshop room.";
     if (life.performance || life.requested) return "This agent already has a visit in progress.";
-    if (life.actor.child && amenity !== "keyboard") {
-      const slot = this.allocateLobby(key);
-      life.lobbyDeck = Math.floor(slot / LOBBY_SPOTS.length);
-      life.rest.copy(vector(LOBBY_SPOTS[slot % LOBBY_SPOTS.length]!, life.lobbyDeck));
-    }
-    const deck = amenity === "keyboard" ? life.homeDeck : life.lobbyDeck;
-    const reservation = `${amenity}:${amenity === "keyboard" ? life.actor.projectId : "lobby"}:${deck}`;
+    const reservation = `${amenity}:${amenity === "keyboard" ? life.site.index : "lobby"}`;
     if (this.reservations.has(reservation))
       return "This item is reserved. Choose another agent or try when it is free.";
-    const itemCells = this.cellsForItem(life, amenity, deck);
+    const itemCells = this.cellsForItem(life, amenity);
     if (
       [...itemCells].some(
         (cell) =>
@@ -545,14 +573,14 @@ export class OfficeMotion {
     )
       return "The approach or use space is busy. Try when that route is clear.";
     if (
-      [...this.lives.values()].some(
-        (other) =>
-          other !== life &&
-          Math.abs(other.position.y - deck * DECK_HEIGHT) < 1 &&
-          itemCells.has(
-            `${Math.round(other.position.x * 2)}:${deck * 2}:${Math.round(other.position.z * 2)}`,
-          ),
-      )
+      [...this.lives.values()].some((other) => {
+        if (other === life) return false;
+        const body = lifeBodyBox(other);
+        for (let x = Math.floor(body.min[0] * 2); x <= Math.ceil(body.max[0] * 2); x++)
+          for (let z = Math.floor(body.min[1] * 2); z <= Math.ceil(body.max[1] * 2); z++)
+            if (itemCells.has(`${x}:0:${z}`)) return true;
+        return false;
+      })
     )
       return "Another occupant is in this item's use space.";
     this.itemCells.set(reservation, { owner: key, cells: itemCells });
@@ -562,13 +590,13 @@ export class OfficeMotion {
     life.requested = amenity;
     const target =
       amenity === "keyboard"
-        ? vector(roomPoint(life.site, life.variant, p.start), deck)
-        : vector(p.start, deck);
+        ? vector(roomPoint(life.site, life.variant, p.start))
+        : vector(p.start);
     const start: Point = [life.position.x, life.position.z];
     const local =
       amenity === "keyboard"
         ? null
-        : lobbyPath(start, p.start, deck, life.actor.child, this.occupiedLobbyPoints(life));
+        : lobbyPath(start, p.start, life.actor.child, this.occupiedLobbyPoints(life));
     if (amenity === "keyboard") {
       const localPosition = roomLocal(life.site, life.variant, [life.position.x, life.position.z]);
       if (
@@ -583,17 +611,13 @@ export class OfficeMotion {
           p.start,
           obstacles[life.variant],
           [-6, -5.5, 6, 5.5],
-          0.7,
+          life.actor.child ? bodyBounds.child.walk : bodyBounds.main.walk,
         );
         if (!path) {
           this.release(life);
           return "No clear approach to this keyboard is available.";
         }
-        life.route.splice(
-          0,
-          life.route.length,
-          ...pathsToWorld(path, life.site, life.variant, life.homeDeck),
-        );
+        life.route.splice(0, life.route.length, ...pathsToWorld(path, life.site, life.variant));
         life.phase = "approach";
       }
     } else if (
@@ -605,8 +629,8 @@ export class OfficeMotion {
       life.route.splice(0, life.route.length, ...local);
       life.phase = "approach";
     } else {
-      life.route.splice(0, life.route.length, target);
-      life.phase = "approach";
+      this.release(life);
+      return "No clear approach to this item is available.";
     }
     return null;
   }
@@ -644,7 +668,7 @@ export class OfficeMotion {
     let moving = false;
     let changedCell = false;
     for (const life of this.lives.values()) {
-      const cell = `${Math.floor(life.position.x / 12)}:${Math.round(life.position.y / 7)}:${Math.floor(life.position.z / 12)}`;
+      const cell = `${Math.floor(life.position.x / 12)}:${0}:${Math.floor(life.position.z / 12)}`;
       if (cell !== life.renderCell) {
         life.renderCell = cell;
         changedCell = true;
@@ -662,8 +686,7 @@ export class OfficeMotion {
           const ended = life.performance;
           this.release(life);
           life.phase = "rest";
-          if (ended !== "keyboard")
-            life.position.copy(vector(PERFORMANCES[ended].start, life.lobbyDeck));
+          if (ended !== "keyboard") life.position.copy(vector(PERFORMANCES[ended].start));
           if (life.departing) continue;
           if (ended === "keyboard") {
             life.destination = "lobby";
@@ -675,15 +698,7 @@ export class OfficeMotion {
             life.destination = "lobby";
             this.travel(life, "home");
           } else {
-            const path = lobbyPath(
-              [life.position.x, life.position.z],
-              [life.rest.x, life.rest.z],
-              life.lobbyDeck,
-            );
-            if (path) {
-              life.route.splice(0, life.route.length, ...path);
-              life.phase = "walking";
-            }
+            this.travel(life, "lobby");
           }
         }
         continue;
@@ -695,10 +710,25 @@ export class OfficeMotion {
           continue;
         }
         if (reduced) {
-          life.position.copy(life.route.at(-1)!);
+          const target = life.route.at(-1)!;
+          if (
+            [...this.lives.values()].some(
+              (other) =>
+                other !== life && boxesOverlap(lifeBodyBox(life, target), lifeBodyBox(other)),
+            )
+          ) {
+            life.routeBlocked = true;
+            continue;
+          }
+          life.position.copy(target);
           life.route.splice(0);
           this.releaseTraffic(life);
-          if (life.destination === "home") life.heading = roomRotation(life.site, life.variant);
+          life.heading =
+            life.destination === "home"
+              ? roomRotation(life.site, life.variant)
+              : life.restSite
+                ? roomRotation(life.restSite, "atlas")
+                : 0;
           this.visitOnArrival(life, reduced);
           continue;
         }
@@ -710,7 +740,12 @@ export class OfficeMotion {
           life.route.shift();
           if (life.route.length === 0) {
             this.releaseTraffic(life);
-            if (life.destination === "home") life.heading = roomRotation(life.site, life.variant);
+            life.heading =
+              life.destination === "home"
+                ? roomRotation(life.site, life.variant)
+                : life.restSite
+                  ? roomRotation(life.restSite, "atlas")
+                  : 0;
             this.visitOnArrival(life, reduced);
           }
           continue;
@@ -718,12 +753,15 @@ export class OfficeMotion {
         const next = life.position
           .clone()
           .addScaledVector(direction, Math.min(distance, delta * (reduced ? 8 : 0.9)) / distance);
+        const heading =
+          Math.hypot(direction.x, direction.z) > 0.01
+            ? Math.atan2(direction.x, direction.z)
+            : life.heading;
         const blocked = [...this.lives.values()].some(
           (other) =>
-            other !== life &&
-            Math.abs(other.position.y - next.y) < 1 &&
-            Math.hypot(other.position.x - next.x, other.position.z - next.z) < 2.05,
+            other !== life && boxesOverlap(lifeBodyBox(life, next, heading), lifeBodyBox(other)),
         );
+
         life.routeBlocked = blocked;
         if (blocked) continue;
         life.position.copy(next);
@@ -735,8 +773,8 @@ export class OfficeMotion {
         const p = PERFORMANCES[life.requested],
           target =
             life.requested === "keyboard"
-              ? vector(roomPoint(life.site, life.variant, p.start), life.homeDeck)
-              : vector(p.start, life.lobbyDeck);
+              ? vector(roomPoint(life.site, life.variant, p.start))
+              : vector(p.start);
         if (life.position.distanceTo(target) > 0.1) {
           const path =
             life.requested === "keyboard"
@@ -745,15 +783,14 @@ export class OfficeMotion {
                   p.start,
                   obstacles[life.variant] as ReadonlyArray<{ min: Point; max: Point }>,
                   [-6, -5.5, 6, 5.5],
-                  0.7,
+                  life.actor.child ? bodyBounds.child.walk : bodyBounds.main.walk,
                 )
               : null;
           const route = path
-            ? pathsToWorld(path, life.site, life.variant, life.homeDeck)
+            ? pathsToWorld(path, life.site, life.variant)
             : lobbyPath(
                 [life.position.x, life.position.z],
                 p.start,
-                life.lobbyDeck,
                 life.actor.child,
                 this.occupiedLobbyPoints(life),
               );
@@ -781,7 +818,6 @@ export class OfficeMotion {
     this.lives.clear();
     this.reservations.clear();
     this.slots.clear();
-    this.lobbySlots.clear();
     this.trafficOwners.clear();
     this.pathBuilders.clear();
     this.itemCells.clear();

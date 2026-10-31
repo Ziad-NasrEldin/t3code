@@ -12,6 +12,7 @@ import {
 import { LinkRequestCard } from "./LinkRequestCard";
 import { SecretRequestCard } from "./SecretRequestCard";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { cleanTranscript, hasUnknownResponseKind } from "./cleanTranscript";
 
 /**
  * The timeline with the streamed text. ChatView reads the thread through its quiet
@@ -21,7 +22,6 @@ import { MessagesTimeline } from "./MessagesTimeline";
  */
 export function ThreadTimeline({
   clean = false,
-  completedRunIds = [],
   threadDetailRef,
   entriesInput,
   draftEntries,
@@ -31,7 +31,6 @@ export function ThreadTimeline({
   ...timelineProps
 }: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
   clean?: boolean;
-  completedRunIds?: ReadonlyArray<string>;
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
   threadDetailRef: ScopedThreadRef | null;
   entriesInput: Omit<TimelineEntriesInput, "visibleTurnItems">;
@@ -61,24 +60,7 @@ export function ThreadTimeline({
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
   if (!clean) return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
-  const completed = new Set(completedRunIds);
-  const lastResponses = new Map<string, string>();
-  for (const entry of displayedEntries) {
-    if (
-      entry.kind === "message" &&
-      entry.message.role === "assistant" &&
-      !entry.message.streaming &&
-      (entry.message.runId === null || completed.has(entry.message.runId))
-    )
-      lastResponses.set(entry.message.runId ?? entry.id, entry.id);
-  }
-  const transcript = displayedEntries.filter(
-    (entry) =>
-      entry.kind === "message" &&
-      (entry.message.role === "user" ||
-        (entry.message.role === "assistant" &&
-          lastResponses.get(entry.message.runId ?? entry.id) === entry.id)),
-  );
+  const transcript = cleanTranscript(displayedEntries);
   const requests = displayedEntries.filter(
     (entry) =>
       entry.kind === "event" &&
@@ -87,6 +69,12 @@ export function ThreadTimeline({
   );
   return (
     <>
+      {hasUnknownResponseKind(displayedEntries) ? (
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          Some responses have no final-response metadata. Open this thread in normal T3 chat to see
+          its full history.
+        </p>
+      ) : null}
       {requests.length > 0 ? (
         <section
           aria-label="Operational requests"
