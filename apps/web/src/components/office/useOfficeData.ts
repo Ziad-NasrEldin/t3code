@@ -113,7 +113,8 @@ export function useOfficeData(environmentId: EnvironmentId, supported: boolean, 
   }
   const online = environment?.connection.phase === "connected";
   const ready =
-    shellStatus === "live" &&
+    online &&
+    (shellStatus === "live" || shellStatus === "synchronizing") &&
     generation > 0 &&
     retained?.generation === generation &&
     !AsyncResult.isFailure(result);

@@ -148,7 +148,7 @@ it.effect(
       expect(test.read().ready).toBe(true);
       h.shellStatus = "synchronizing";
       expect(test.read().online).toBe(true);
-      expect(test.read().ready).toBe(false);
+      expect(test.read().ready).toBe(true);
       h.shellStatus = "live";
       h.registry.set(h.query, AsyncResult.failure(Cause.fail(new Error("inventory failed"))));
       expect(test.read().children).toEqual(test.value.children);
