@@ -17,7 +17,8 @@ export function restAreaKey(slot: number): string | null {
   return slot < 1 ? null : `common:${Math.floor((slot - 1) / MODULE_BERTHS)}`;
 }
 export function ringSize(ring: number): Point {
-  return [9.5 + ring * 18, 8.5 + ring * 18];
+  // The fixed lobby rooms need the same 7.5-unit door setback as the outer modules.
+  return [9.5 + ring * 18, ring === 0 ? 8 : 8.5 + ring * 18];
 }
 export function ringSites(ring: number): ReadonlyArray<Omit<RoomSite, "index">> {
   if (ring === 0)
@@ -95,7 +96,13 @@ export function roomLocal(site: RoomSite, variant: RoomVariant, point: Point): P
   return [x * Math.cos(a) - z * Math.sin(a), x * Math.sin(a) + z * Math.cos(a)];
 }
 export function homePoint(site: RoomSite, variant: RoomVariant, slot: number): Point {
-  return roomPoint(site, variant, slot % 2 === 0 ? [-2.5, 3.75] : [3, 3.5]);
+  return roomPoint(site, variant, homeLocal(variant, slot));
+}
+export function homeLocal(variant: RoomVariant, slot: number): Point {
+  // Reserved resting envelopes must leave an exit aisle for the other berth.
+  return slot % 2 === 0
+    ? [-2.5, variant === "prism" ? 4.3125 : 3.75]
+    : [3, variant === "grove" ? 4.125 : 3.5];
 }
 export function roomDoor(site: RoomSite): Point {
   const [x, z] = ringSize(site.ring);
@@ -104,22 +111,74 @@ export function roomDoor(site: RoomSite): Point {
   if (site.side === "east") return [x, site.z];
   return [-x, site.z];
 }
-export function routeToLobby(site: RoomSite): ReadonlyArray<Point> {
-  const [x, z] = ringSize(site.ring),
-    door = roomDoor(site),
-    points: Point[] = [door];
-  if (site.side === "north" || site.side === "south") points.push([x, door[1]]);
-  if (site.side === "west") points.push([-x, z]);
-  points.push([x, z]);
-  for (let r = site.ring - 1; r >= 0; r--) {
-    const [innerX, innerZ] = ringSize(r);
-    points.push([x === innerX ? innerX : ringSize(r + 1)[0], innerZ], [innerX, innerZ]);
+function aroundRing(ring: number, start: Point, end: Point): Point[] {
+  const [x, z] = ringSize(ring),
+    perimeter = 4 * (x + z);
+  const linkZ = ring ? ringSize(ring - 1)[1] : 0;
+  if ([start, end].every((p) => p[0] === x && p[1] >= linkZ && p[1] <= z)) return [start, end];
+  const at = (p: Point) =>
+    Math.abs(p[1] + z) < 0.001
+      ? p[0] + x
+      : Math.abs(p[0] - x) < 0.001
+        ? 2 * x + p[1] + z
+        : Math.abs(p[1] - z) < 0.001
+          ? 2 * x + 2 * z + x - p[0]
+          : 4 * x + 2 * z + z - p[1];
+  const first = at(start),
+    length = (at(end) - first + perimeter) % perimeter;
+  const corners: Array<{ at: number; point: Point }> = [
+    { at: 0, point: [-x, -z] },
+    { at: 2 * x, point: [x, -z] },
+    { at: 2 * (x + z), point: [x, z] },
+    { at: 4 * x + 2 * z, point: [-x, z] },
+  ];
+  return [
+    start,
+    ...corners
+      .map((corner) => ({
+        point: corner.point,
+        distance: (corner.at - first + perimeter) % perimeter,
+      }))
+      .filter((corner) => corner.distance > 0 && corner.distance < length)
+      .sort((a, b) => a.distance - b.distance)
+      .map((corner) => corner.point),
+    end,
+  ];
+}
+export function routeBetweenSites(
+  from: RoomSite | null,
+  to: RoomSite | null,
+): ReadonlyArray<Point> {
+  if (!from && !to) return [[7, 0]];
+  let ring = from?.ring ?? 0;
+  const targetRing = to?.ring ?? 0;
+  let at: Point = from ? roomDoor(from) : [9.5, 0];
+  const points: Point[] = from ? [] : [[7, 0]];
+  // One-way rings let a convoy keep moving on the existing narrow floor; links drain before reversing.
+  while (ring !== targetRing) {
+    const [x, z] = ringSize(ring);
+    if (ring > targetRing) {
+      const inner = ringSize(ring - 1);
+      points.push(...aroundRing(ring, at, [x, inner[1]]), inner);
+      at = inner;
+      ring--;
+    } else {
+      const outer = ringSize(ring + 1);
+      points.push(...aroundRing(ring, at, [x, z]), [outer[0], z]);
+      at = [outer[0], z];
+      ring++;
+    }
   }
-  points.push([9.5, 8.5], [9.5, 0], [7, 0]);
+  points.push(...aroundRing(ring, at, to ? roomDoor(to) : [9.5, 0]));
+  if (!to) points.push([7, 0]);
   return points.filter(
     (p, i) => i === 0 || p[0] !== points[i - 1]![0] || p[1] !== points[i - 1]![1],
   );
 }
+export function routeToLobby(site: RoomSite): ReadonlyArray<Point> {
+  return routeBetweenSites(site, null);
+}
+
 export interface Obstacle {
   readonly min: Point;
   readonly max: Point;

@@ -90,22 +90,21 @@ export function advanceActorFrame(
   } else instance.elapsed += dt;
   root.position.copy(life.position);
   root.rotation.y = life.heading;
-  const clipName =
-    life.route.length > 0
-      ? "Walk"
-      : instance.wakeTransition > 0
-        ? "Wake"
-        : instance.sleepTransition > 0
-          ? "LieDown"
-          : active === "sleeping"
-            ? "Sleep"
-            : active === "waiting"
-              ? "Attention"
-              : active === "thinking"
-                ? "Thinking"
-                : active === "working" || active === "streaming" || active === "starting"
-                  ? "Working"
-                  : "Idle";
+  const clipName = life.walking
+    ? "Walk"
+    : instance.wakeTransition > 0
+      ? "Wake"
+      : instance.sleepTransition > 0
+        ? "LieDown"
+        : active === "sleeping"
+          ? "Sleep"
+          : active === "waiting"
+            ? "Attention"
+            : active === "thinking"
+              ? "Thinking"
+              : active === "working" || active === "streaming" || active === "starting"
+                ? "Working"
+                : "Idle";
   if (clipName !== instance.lastClip) {
     const clip =
       asset.animations.find((clip) => clip.name === clipName) ??
