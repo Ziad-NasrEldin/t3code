@@ -573,7 +573,7 @@ function OfficeFloor({
                     )}
                   </div>
                 ) : null}
-                {entry.key === selected && actor ? (
+                {entry.key === selected && actor && !directory ? (
                   <ActorActions
                     actor={actor}
                     online={data.online && data.ready}
