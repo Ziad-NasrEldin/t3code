@@ -3,6 +3,13 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
+import {
+  createDeterministicAttachmentId,
+  chatAttachmentStableKey,
+  toSafeThreadAttachmentSegment,
+} from "@t3tools/shared/attachmentIdentity";
+export { createDeterministicAttachmentId, chatAttachmentStableKey, toSafeThreadAttachmentSegment };
+
 import type { ChatAttachment } from "@t3tools/contracts";
 import { htmlRenderFromToolItem, mcpAppFromToolItem } from "@t3tools/shared/toolOutput";
 
@@ -13,7 +20,6 @@ import {
 import { inferImageExtension, SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 
 const ATTACHMENT_FILENAME_EXTENSIONS = [...SAFE_IMAGE_FILE_EXTENSIONS, ".bin"];
-const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
 const ATTACHMENT_ID_UUID_PATTERN = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const ATTACHMENT_ID_FILE_EXTENSION_PATTERN = "[a-z0-9]{1,10}";
@@ -25,21 +31,6 @@ const ATTACHMENT_ID_PATTERN = new RegExp(
 export const PENDING_ATTACHMENT_THREAD_SEGMENT = "pending";
 const PENDING_ATTACHMENT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const PARTIAL_UPLOAD_MAX_AGE_MS = 60 * 60 * 1000;
-
-export function toSafeThreadAttachmentSegment(threadId: string): string | null {
-  const segment = threadId
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/gi, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS)
-    .replace(/[-_]+$/g, "");
-  if (segment.length === 0) {
-    return null;
-  }
-  return segment === PENDING_ATTACHMENT_THREAD_SEGMENT ? "_pending" : segment;
-}
 
 export function attachmentFileExtension(fileName: string): string {
   const extension = NodePath.extname(fileName).toLowerCase();
@@ -86,30 +77,6 @@ export function createAttachmentId(threadId: string, extension?: string): string
     return null;
   }
   return `${threadSegment}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
-}
-
-export function createDeterministicAttachmentId(
-  threadId: string,
-  stableKey: string,
-): string | null {
-  const threadSegment = toSafeThreadAttachmentSegment(threadId);
-  if (!threadSegment) return null;
-  const hash = NodeCrypto.createHash("sha256")
-    .update(JSON.stringify([threadId, stableKey]))
-    .digest("hex")
-    .slice(0, 32);
-  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
-  return `${threadSegment}-${uuid}`;
-}
-
-/** Retries keep ids; changed bytes must get new ids because clients cache images by id. */
-export function chatAttachmentStableKey(
-  messageId: string,
-  index: number,
-  bytes: Uint8Array,
-): string {
-  const digest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
-  return `${messageId}:${index}:${digest}`;
 }
 
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {

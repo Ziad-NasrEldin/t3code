@@ -79,6 +79,7 @@ import {
   makeSubagentChildThread,
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
+import { captureOutputAttachment } from "./outputAttachment.ts";
 import { openCodeToolTurnItem } from "./toolItems.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
@@ -1176,15 +1177,22 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
         const emitTextPart = Effect.fnUntraced(function* (
           state: OpenCodeThreadState,
           turn: ActiveOpenCodeTurn,
-          part: Extract<OpenCodePart, { type: "text" | "reasoning" }>,
+          part: Extract<OpenCodePart, { type: "text" | "reasoning" | "file" }>,
           forceCompleted = false,
         ) {
           if (part.type === "text" && (part.ignored === true || part.synthetic === true)) return;
-          if (part.text.length === 0) return;
+          if (part.type === "file" && state.messageRoles.get(part.messageID) !== "assistant")
+            return;
+          const content =
+            part.type === "file"
+              ? yield* captureOutputAttachment(host, turn.threadId, part)
+              : { text: part.text, attachments: [] };
+          if (content.text.length === 0 && content.attachments.length === 0) return;
+          const time = "time" in part ? part.time : undefined;
           const emittedAt = yield* DateTime.now;
-          const isCompleted = forceCompleted || part.time?.end !== undefined;
-          const startedAt = dateTimeFromEpoch(part.time?.start, emittedAt);
-          const completedAt = isCompleted ? dateTimeFromEpoch(part.time?.end, emittedAt) : null;
+          const isCompleted = forceCompleted || time?.end !== undefined;
+          const startedAt = dateTimeFromEpoch(time?.start, emittedAt);
+          const completedAt = isCompleted ? dateTimeFromEpoch(time?.end, emittedAt) : null;
           const responseKind = state.responseKinds.get(part.messageID);
           const nativeItemRef = providerRef(part.id);
           const nodeId = idAllocator.derive.nodeFromProviderItem({
@@ -1205,7 +1213,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               runId: turn.runId,
               parentNodeId: turn.rootNodeId,
               rootNodeId: turn.rootNodeId,
-              kind: part.type === "text" ? "assistant_message" : "reasoning",
+              kind: part.type === "reasoning" ? "reasoning" : "assistant_message",
               status: isCompleted ? "completed" : "running",
               countsForRun: false,
               providerThreadId: state.providerThread.id,
@@ -1217,7 +1225,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               completedAt,
             },
           });
-          if (part.type === "text") {
+          if (part.type !== "reasoning") {
             const messageId = idAllocator.derive.messageFromProviderItem({
               driver: OPENCODE_PROVIDER,
               nativeItemId: part.id,
@@ -1231,8 +1239,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               nodeId,
               role: "assistant",
               ...(responseKind ? { responseKind } : {}),
-              text: part.text,
-              attachments: [],
+              text: content.text,
+              attachments: content.attachments,
               streaming: !isCompleted,
               createdAt: startedAt,
               updatedAt: emittedAt,
@@ -1263,7 +1271,8 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 type: "assistant_message",
                 messageId,
                 ...(responseKind ? { responseKind } : {}),
-                text: part.text,
+                text: content.text,
+                attachments: content.attachments,
                 streaming: !isCompleted,
               },
             });
@@ -2038,7 +2047,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           turn.finalized = true;
           const completedAt = yield* DateTime.now;
           for (const part of turn.parts.values()) {
-            if (part.type === "text" || part.type === "reasoning") {
+            if (part.type === "text" || part.type === "reasoning" || part.type === "file") {
               yield* emitTextPart(state, turn, part, true);
             }
           }
@@ -2388,6 +2397,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           if (state === undefined) return;
           const message = event.properties.info;
           state.messageRoles.set(message.id, message.role);
+          if (message.role === "assistant" && state.activeTurn) {
+            for (const partId of state.activeTurn.partIdsByMessage.get(message.id) ?? []) {
+              const part = state.activeTurn.parts.get(partId);
+              if (part?.type === "file") yield* emitTextPart(state, state.activeTurn, part);
+            }
+          }
           if (message.role === "assistant") {
             const usage = state.activeTurn?.usage;
             if (usage === undefined) return;
@@ -2473,6 +2488,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           switch (part.type) {
             case "text":
             case "reasoning":
+            case "file":
               yield* emitTextPart(state, turn, part);
               return;
             case "tool":
@@ -2518,7 +2534,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             state.responseKinds.set(message.id, message.finish === "stop" ? "final" : "commentary");
           for (const partId of turn.partIdsByMessage.get(message.id) ?? []) {
             const part = turn.parts.get(partId);
-            if (part?.type === "text" || part?.type === "reasoning") {
+            if (part?.type === "text" || part?.type === "reasoning" || part?.type === "file") {
               yield* emitTextPart(state, turn, part, true);
             }
           }
@@ -2906,48 +2922,58 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           const state = threads.get(sessionId);
           const snapshotNow = yield* DateTime.now;
-          const messages: Array<OrchestrationV2ConversationMessage> = nativeMessages.flatMap(
-            ({ info, parts }) => {
-              const text = parts
-                .filter(
-                  (part): part is Extract<OpenCodePart, { type: "text" }> => part.type === "text",
-                )
-                .filter((part) => part.ignored !== true && part.synthetic !== true)
-                .map((part) => part.text)
-                .join("\n");
-              if (text.length === 0) return [];
-              const createdAt = dateTimeFromEpoch(info.time.created, snapshotNow);
-              return [
-                {
-                  createdBy: info.role === "user" ? "user" : "agent",
-                  creationSource: "provider",
+          const messages: Array<OrchestrationV2ConversationMessage> = [];
+          for (const { info, parts } of nativeMessages) {
+            const text = parts
+              .filter(
+                (part): part is Extract<OpenCodePart, { type: "text" }> => part.type === "text",
+              )
+              .filter((part) => part.ignored !== true && part.synthetic !== true)
+              .map((part) => part.text)
+              .join("\n");
+            const createdAt = dateTimeFromEpoch(info.time.created, snapshotNow);
+            const base: OrchestrationV2ConversationMessage = {
+              createdBy: info.role === "user" ? "user" : "agent",
+              creationSource: "provider",
+              id: idAllocator.derive.messageFromProviderItem({
+                driver: OPENCODE_PROVIDER,
+                nativeItemId: info.id,
+              }),
+              threadId: providerThread.appThreadId ?? input.threadId,
+              runId: null,
+              nodeId: null,
+              role: info.role,
+              ...(info.role === "assistant" &&
+              (info.finish === "stop" || info.finish === "tool-calls")
+                ? {
+                    responseKind:
+                      info.finish === "stop" ? ("final" as const) : ("commentary" as const),
+                  }
+                : {}),
+              text,
+              attachments: [],
+              streaming: false,
+              createdAt,
+              updatedAt:
+                info.role === "assistant"
+                  ? dateTimeFromEpoch(info.time.completed, createdAt)
+                  : createdAt,
+            };
+            if (text.length > 0) messages.push(base);
+            if (info.role === "assistant")
+              for (const part of parts) {
+                if (part.type !== "file") continue;
+                const content = yield* captureOutputAttachment(host, base.threadId, part);
+                messages.push({
+                  ...base,
                   id: idAllocator.derive.messageFromProviderItem({
                     driver: OPENCODE_PROVIDER,
-                    nativeItemId: info.id,
+                    nativeItemId: part.id,
                   }),
-                  threadId: providerThread.appThreadId ?? input.threadId,
-                  runId: null,
-                  nodeId: null,
-                  role: info.role,
-                  ...(info.role === "assistant" &&
-                  (info.finish === "stop" || info.finish === "tool-calls")
-                    ? {
-                        responseKind:
-                          info.finish === "stop" ? ("final" as const) : ("commentary" as const),
-                      }
-                    : {}),
-                  text,
-                  attachments: [],
-                  streaming: false,
-                  createdAt,
-                  updatedAt:
-                    info.role === "assistant"
-                      ? dateTimeFromEpoch(info.time.completed, createdAt)
-                      : createdAt,
-                },
-              ];
-            },
-          );
+                  ...content,
+                });
+              }
+          }
           const lastUser = nativeMessages.findLast(({ info }) => info.role === "user")?.info.id;
           return {
             providerThread: {
