@@ -2379,6 +2379,125 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect.each([false, true])(
+    "retains native subagent files during reconnect (background %s)",
+    (background) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const attachmentsDir = yield* fs.makeTempDirectoryScoped();
+        const tool = { sessionID: SESSION, assistantMessageID: "msg_call", id: "call_gap" };
+        const { runtime, thread } = yield* resumed(
+          [
+            out("session.prompt", { sessionID: SESSION, id: PROMPT_ID, text: "<any>" }),
+            promptAccepted,
+            event("session.execution.started", { sessionID: SESSION }),
+            event("session.tool.input.started", { ...tool, name: "subagent" }),
+            event("session.tool.called", {
+              ...tool,
+              name: "subagent",
+              input: { prompt: "Inspect", background },
+            }),
+            ...(background
+              ? [
+                  {
+                    type: "emit_inbound" as const,
+                    frame: {
+                      type: "sdk.event",
+                      event: {
+                        id: "evt_file_launch",
+                        created: 1,
+                        type: "session.tool.success",
+                        durable: { aggregateID: SESSION, seq: 1, version: 2 },
+                        data: {
+                          ...tool,
+                          executed: true,
+                          metadata: { status: "running" },
+                          content: [
+                            {
+                              type: "file",
+                              uri: "data:text/plain;base64,Y2hpbGQ=",
+                              mime: "text/plain",
+                              name: "launch.txt",
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  },
+                ]
+              : []),
+            ...reconnected({}, "succeeded", {
+              content: [
+                {
+                  type: "tool",
+                  id: "call_gap",
+                  name: "subagent",
+                  executed: true,
+                  state: {
+                    status: "completed",
+                    input: { prompt: "Inspect", background },
+                    metadata: {},
+                    content: [
+                      { type: "text", text: "Recovered child result" },
+                      {
+                        type: "file",
+                        uri: "data:text/plain;base64,Y2hpbGQ=",
+                        mime: "text/plain",
+                        name: "child.txt",
+                      },
+                      {
+                        type: "file",
+                        uri: "file:///untrusted",
+                        mime: "text/plain",
+                        name: "missing.txt",
+                      },
+                    ],
+                  },
+                  time: { created: 2, ran: 2, completed: 2 },
+                },
+              ],
+            }),
+          ],
+          { attachmentsDir },
+        );
+        const collected = yield* runtime.events.pipe(
+          Stream.takeUntil((event) => event.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(turnInput(thread));
+        const seen = yield* Fiber.join(collected);
+        const items = seen.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.nativeItemRef?.nativeId === "call_gap"
+            ? [event.turnItem]
+            : [],
+        );
+        assert.isTrue(items.length > 0);
+        assert.isTrue(items.every((item) => item.type === "subagent"));
+        if (background)
+          assert.isTrue(
+            items.some(
+              (item) =>
+                item.status === "running" && item.outputAttachments?.[0]?.name === "launch.txt",
+            ),
+          );
+        const last = items.at(-1)!;
+        assert.equal(last.outputAttachments?.[0]?.name, "child.txt");
+        assert.deepEqual(last.outputAttachmentErrors, ["[Attachment unavailable: missing.txt]"]);
+        assert.equal(last.type === "subagent" ? last.result : null, "Recovered child result");
+        assert.equal(
+          yield* fs.readFileString(
+            resolveAttachmentPathById({
+              attachmentsDir,
+              attachmentId: last.outputAttachments![0]!.id,
+            })!,
+          ),
+          "child",
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("ends a turn that finished while the stream was down with the server's outcome", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([

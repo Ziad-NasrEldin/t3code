@@ -2048,6 +2048,42 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitSubagent(call);
     });
 
+    const applyToolSuccess = Effect.fnUntraced(function* (
+      state: ThreadState,
+      turn: ActiveTurn,
+      result: Pick<EventOf<"session.tool.success">["data"], "id" | "content" | "metadata">,
+    ) {
+      const call = state.calls.get(result.id);
+      if (call !== undefined) {
+        const childId = stringField(result.metadata, "sessionID");
+        if (childId !== undefined) yield* attachChild(call, childId);
+        call.outputFiles = yield* captureToolOutputAttachments(
+          host,
+          turn.input.threadId,
+          call.nativeId,
+          result.content
+            .filter((part) => part.type === "file")
+            .map((file) => ({
+              url: file.uri,
+              mime: file.mime,
+              ...(file.name === undefined ? {} : { filename: file.name }),
+            })),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+        // Background launch receipts retain their files while reports determine completion.
+        if (result.metadata?.["status"] === "running") {
+          call.background = true;
+          return yield* emitSubagent(call);
+        }
+        return yield* settleCall(call, "completed", subagentOutput(textOf(result.content)));
+      }
+      yield* emitTool(state, turn, result.id, "completed", {
+        output: textOf(result.content),
+        metadata: result.metadata,
+        files: result.content.filter((part) => part.type === "file"),
+      });
+      turn.tools.delete(result.id);
+    });
+
     const onTurnEvent = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
@@ -2103,40 +2139,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (call !== undefined && childId !== undefined) yield* attachChild(call, childId);
           return;
         }
-        case "session.tool.success": {
-          const call = state.calls.get(event.data.id);
-          if (call !== undefined) {
-            const childId = stringField(event.data.metadata, "sessionID");
-            if (childId !== undefined) yield* attachChild(call, childId);
-            call.outputFiles = yield* captureToolOutputAttachments(
-              host,
-              turn.input.threadId,
-              call.nativeId,
-              event.data.content
-                .filter((part) => part.type === "file")
-                .map((file) => ({
-                  url: file.uri,
-                  mime: file.mime,
-                  ...(file.name === undefined ? {} : { filename: file.name }),
-                })),
-            ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
-            // Background and joined-background calls return at launch; reports settle them.
-            if (event.data.metadata?.["status"] === "running") {
-              if (call.background) return;
-              call.background = true;
-              return yield* emitSubagent(call);
-            }
-            return yield* settleCall(call, "completed", subagentOutput(textOf(event.data.content)));
-          }
-          const output = textOf(event.data.content);
-          yield* emitTool(state, turn, event.data.id, "completed", {
-            output,
-            metadata: event.data.metadata,
-            files: event.data.content.filter((part) => part.type === "file"),
-          });
-          turn.tools.delete(event.data.id);
-          return;
-        }
+        case "session.tool.success":
+          return yield* applyToolSuccess(state, turn, event.data);
         case "session.tool.failed": {
           const aborted = event.data.error.type === "aborted";
           const call = state.calls.get(event.data.id);
@@ -2604,6 +2608,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             continue;
           }
           if (part.type !== "tool") continue;
+          if (part.name === "subagent" || state.calls.has(part.id)) {
+            if (!state.calls.has(part.id)) yield* startCall(state, turn, part.id);
+            const call = state.calls.get(part.id)!;
+            const recoveredInput =
+              typeof part.state.input === "object" && part.state.input !== null
+                ? part.state.input
+                : undefined;
+            call.prompt = stringField(recoveredInput, "prompt") ?? call.prompt;
+            call.title = stringField(recoveredInput, "description") ?? call.title;
+            call.background =
+              call.background ||
+              (typeof part.state.input === "object" &&
+                part.state.input !== null &&
+                "background" in part.state.input &&
+                part.state.input.background === true);
+            if (part.state.status === "completed")
+              yield* applyToolSuccess(state, turn, {
+                id: part.id,
+                content: part.state.content,
+                metadata: part.state.metadata,
+              });
+            else if (part.state.status === "error")
+              yield* settleCall(call, "failed", part.state.error.message);
+            else yield* emitSubagent(call);
+            continue;
+          }
           if (!turn.tools.has(part.id)) {
             turn.tools.set(part.id, { name: part.name, input: {} });
             turn.startedAt.set(part.id, yield* DateTime.now);
