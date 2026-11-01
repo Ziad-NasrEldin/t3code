@@ -2077,6 +2077,48 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("cancels child approval and input when its active session is deleted", () =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([
+        ...backgroundLaunch(CHILD),
+        event("permission.asked", { ...shellAsk.data, sessionID: CHILD }),
+        event("form.created", {
+          form: {
+            id: "frm_0eb79ab35001fkvFECSh3wYNVD",
+            sessionID: CHILD,
+            title: "Choose",
+            fields: [{ key: "answer", type: "string", title: "Answer" }],
+          },
+        }),
+        {
+          type: "emit_inbound",
+          frame: {
+            type: "sdk.event",
+            event: {
+              id: "evt_sessiondeleted0000",
+              created: 1,
+              type: "session.deleted",
+              data: { sessionID: CHILD },
+              durable: { aggregateID: CHILD, seq: 1, version: 2 },
+            },
+          },
+        },
+        event("session.execution.succeeded", { sessionID: SESSION }),
+      ]);
+      const events = yield* runtime.events.pipe(
+        Stream.takeUntil((entry) => entry.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* runtime.startTurn(withLineage(thread));
+      const collected = yield* Fiber.join(events);
+      const statuses = collected.flatMap((entry) =>
+        entry.type === "runtime_request.updated" ? [entry.runtimeRequest.status] : [],
+      );
+      assert.deepEqual(statuses, ["pending", "pending", "cancelled", "cancelled"]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps 'allow this session' in the session's rules, not OpenCode's saved grants", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed(

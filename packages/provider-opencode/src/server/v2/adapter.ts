@@ -2291,6 +2291,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
       const sessionId = sessionOfEvent(event);
       if (event.type === "session.deleted") {
+        for (const entry of Array.from(pending.values())) {
+          if (entry.sessionId === event.data.sessionID) yield* settleRequest(entry, "cancelled");
+        }
         const info = announced.get(event.data.sessionID);
         if (info !== undefined && info.closedAt === undefined)
           announced.set(event.data.sessionID, { ...info, closedAt: yield* DateTime.now });
