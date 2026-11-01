@@ -1,5 +1,9 @@
 import type { ToolCallDiffTarget } from "../../diffPanelStore";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import type {
+  ChatAttachment,
+  EnvironmentId,
+  OrchestrationV2ProjectedTurnItem,
+} from "@t3tools/contracts";
 import {
   toolCallLines,
   turnItemDetailRevision,
@@ -16,6 +20,7 @@ import { useRenderedAppearance } from "../../hooks/useTheme";
 import { cn } from "../../lib/utils";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
+import { useAssetUrlState } from "../../assets/assetUrls";
 import { useTurnItemDetail } from "../../state/queries";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import { Button } from "../ui/button";
@@ -127,6 +132,8 @@ function useFetchedTurnItem(
     output: {
       output: turnItemOutputText(item),
       images: turnItemOutputImages(item),
+      attachments: item.outputAttachments ?? [],
+      attachmentErrors: item.outputAttachmentErrors ?? [],
       environmentId,
       pending: item === wireItem && detail.isPending,
       error:
@@ -140,7 +147,31 @@ function useFetchedTurnItem(
   };
 }
 
+function ToolAttachment(props: {
+  readonly attachment: ChatAttachment;
+  readonly environmentId: EnvironmentId;
+}) {
+  const file = props.attachment;
+  const asset = useAssetUrlState(props.environmentId, {
+    _tag: "attachment",
+    attachmentId: file.id,
+    fileName: file.name,
+    mimeType: file.mimeType,
+  });
+  return asset._tag === "Success" ? (
+    <a href={asset.url} download={file.name} className="block underline">
+      {file.name}
+    </a>
+  ) : (
+    <div className="text-muted-foreground">
+      {file.name} · {asset._tag === "Failure" ? "Unavailable" : "Loading…"}
+    </div>
+  );
+}
+
 interface ToolOutputState {
+  readonly attachments: ReadonlyArray<ChatAttachment>;
+  readonly attachmentErrors: ReadonlyArray<string>;
   readonly output: string | null;
   readonly images: ReturnType<typeof turnItemOutputImages>;
   readonly environmentId: EnvironmentId;
@@ -167,7 +198,10 @@ function ToolOutput(props: ToolOutputState) {
     <div className="text-muted-foreground italic">Loading output…</div>
   ) : props.error ? (
     <div className="text-destructive">Couldn&apos;t load output: {props.error}</div>
-  ) : props.empty && images.length === 0 ? (
+  ) : props.empty &&
+    images.length === 0 &&
+    props.attachments.length === 0 &&
+    props.attachmentErrors.length === 0 ? (
     <div className="text-muted-foreground italic">No output.</div>
   ) : null;
   return (
@@ -187,6 +221,18 @@ export function FetchedToolOutput(props: {
   const { output } = useFetchedTurnItem(props.projectedItem, props.environmentId, props.source);
   return (
     <div className={cn("mt-1.5 space-y-1.5", monoClassName)}>
+      {output.attachments.map((attachment) => (
+        <ToolAttachment
+          key={attachment.id}
+          environmentId={props.environmentId}
+          attachment={attachment}
+        />
+      ))}
+      {output.attachmentErrors.map((error) => (
+        <div key={error} className="text-muted-foreground">
+          {error}
+        </div>
+      ))}
       <ToolOutput {...output} onImageExpand={props.onImageExpand} />
     </div>
   );
@@ -245,6 +291,18 @@ export const V2ItemInspector = memo(function V2ItemInspector(props: V2ItemInspec
   const outputState = fetched.output;
   return (
     <div className="space-y-2 text-xs" data-v2-item-inspector={item.type}>
+      {outputState.attachments.map((attachment) => (
+        <ToolAttachment
+          key={attachment.id}
+          environmentId={props.environmentId}
+          attachment={attachment}
+        />
+      ))}
+      {outputState.attachmentErrors.map((error) => (
+        <div key={error} className="text-muted-foreground">
+          {error}
+        </div>
+      ))}
       {item.type === "reasoning" && item.text ? (
         <div className="rounded-md border border-border/45 bg-muted/15 p-2 italic text-muted-foreground">
           <ChatMarkdown

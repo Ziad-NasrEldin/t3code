@@ -109,3 +109,38 @@ export const captureOutputAttachment = Effect.fn("OpenCode.captureOutputAttachme
   ).pipe(Effect.orElseSucceed(() => false));
   return stored ? { text: "", attachments: [attachment] } : unavailable;
 });
+
+export const captureToolOutputAttachments = Effect.fn("OpenCode.captureToolOutputAttachments")(
+  function* (
+    host: ProviderHost.ProviderHost["Service"],
+    threadId: ThreadId,
+    toolId: string,
+    files: ReadonlyArray<{
+      readonly url: string;
+      readonly mime: string;
+      readonly filename?: string;
+    }>,
+  ) {
+    const outputAttachments: ChatAttachment[] = [];
+    const outputAttachmentErrors: string[] = [];
+    for (const [index, file] of files.slice(0, 8).entries()) {
+      const result = yield* captureOutputAttachment(host, threadId, {
+        ...file,
+        messageID: toolId,
+        id: `${toolId}:file:${index}`,
+      });
+      outputAttachments.push(...result.attachments);
+      if (result.text) outputAttachmentErrors.push(result.text);
+    }
+    if (files.length > 8)
+      outputAttachmentErrors.push(
+        `${files.length - 8} additional tool files are unavailable (limit: 8 per result).`,
+      );
+    return {
+      ...(outputAttachments.length ? { outputAttachments } : {}),
+      ...(outputAttachmentErrors.length
+        ? { outputAttachmentErrors: [...new Set(outputAttachmentErrors)] }
+        : {}),
+    };
+  },
+);

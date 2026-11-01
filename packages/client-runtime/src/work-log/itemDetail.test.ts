@@ -2,7 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
+import { turnItemHasDetail, turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
 
 function toolItem(output: unknown): OrchestrationV2TurnItem {
   return {
@@ -51,4 +51,21 @@ describe("tool image output parsing", () => {
       expect(turnItemOutputText(overflow)).toBe("Two additional screenshots:\n[image]\n[image]");
     },
   );
+});
+
+it("allows inspection of file-only tool output and unavailable files", () => {
+  expect(
+    turnItemHasDetail({
+      ...toolItem(undefined),
+      outputAttachments: [
+        { type: "file", id: "tool-file", name: "result.txt", mimeType: "text/plain", sizeBytes: 5 },
+      ],
+    }),
+  ).toBe(true);
+  expect(
+    turnItemHasDetail({
+      ...toolItem(undefined),
+      outputAttachmentErrors: ["Attachment unavailable"],
+    }),
+  ).toBe(true);
 });

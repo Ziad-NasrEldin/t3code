@@ -1466,6 +1466,9 @@ export type OrchestrationV2UserMessageInputIntent =
   typeof OrchestrationV2UserMessageInputIntent.Type;
 
 const OrchestrationV2TurnItemBaseFields = {
+  /** Persisted tool output stays on its originating item, separate from assistant replies. */
+  outputAttachments: Schema.optional(Schema.Array(ChatAttachment)),
+  outputAttachmentErrors: Schema.optional(Schema.Array(Schema.String)),
   /** Wire-only cursor for collapsed work; persisted items keep their complete history. */
   deferredWork: Schema.optionalKey(
     Schema.Struct({

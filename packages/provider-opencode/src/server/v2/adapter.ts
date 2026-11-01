@@ -87,6 +87,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
 import { openCodeToolTurnItem } from "../toolItems.ts";
+import { captureToolOutputAttachments } from "../outputAttachment.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -234,6 +235,10 @@ interface ActiveTurn {
 }
 
 interface SubagentCall {
+  outputFiles?: {
+    readonly outputAttachments?: ReadonlyArray<ChatAttachment>;
+    readonly outputAttachmentErrors?: ReadonlyArray<string>;
+  };
   readonly toolId: string;
   readonly nativeId: string;
   readonly state: ThreadState;
@@ -984,7 +989,15 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       turn: ActiveTurn,
       id: string,
       status: "running" | "completed" | "failed" | "interrupted",
-      result?: { readonly output: string | undefined; readonly metadata: unknown },
+      result?: {
+        readonly output: string | undefined;
+        readonly metadata: unknown;
+        readonly files?: ReadonlyArray<{
+          readonly uri: string;
+          readonly mime: string;
+          readonly name?: string | undefined;
+        }>;
+      },
     ) {
       const tool = turn.tools.get(id);
       if (tool === undefined) return;
@@ -992,12 +1005,26 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
       const nativeId = `${turn.scope}${id}`;
+      const files = result?.files ?? [];
+      const attachments = yield* captureToolOutputAttachments(
+        host,
+        turn.input.threadId,
+        nativeId,
+        files.map((file) => ({
+          url: file.uri,
+          mime: file.mime,
+          ...(file.name === undefined ? {} : { filename: file.name }),
+        })),
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
       yield* emitNode(state, turn, nativeId, "tool_call", status, startedAt, completedAt);
       yield* emit({
         type: "turn_item.updated",
         driver,
         turnItem: openCodeToolTurnItem(
-          itemBase(state, turn, nativeId, status, startedAt, completedAt, updatedAt),
+          {
+            ...itemBase(state, turn, nativeId, status, startedAt, completedAt, updatedAt),
+            ...attachments,
+          },
           {
             name: tool.name,
             input: tool.input,
@@ -1223,6 +1250,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           startedAt: call.startedAt,
           completedAt,
           updatedAt,
+          ...call.outputFiles,
           type: "subagent",
           subagentId: nodeId,
           origin: "provider_native",
@@ -2080,6 +2108,18 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (call !== undefined) {
             const childId = stringField(event.data.metadata, "sessionID");
             if (childId !== undefined) yield* attachChild(call, childId);
+            call.outputFiles = yield* captureToolOutputAttachments(
+              host,
+              turn.input.threadId,
+              call.nativeId,
+              event.data.content
+                .filter((part) => part.type === "file")
+                .map((file) => ({
+                  url: file.uri,
+                  mime: file.mime,
+                  ...(file.name === undefined ? {} : { filename: file.name }),
+                })),
+            ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
             // Background and joined-background calls return at launch; reports settle them.
             if (event.data.metadata?.["status"] === "running") {
               if (call.background) return;
@@ -2092,6 +2132,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           yield* emitTool(state, turn, event.data.id, "completed", {
             output,
             metadata: event.data.metadata,
+            files: event.data.content.filter((part) => part.type === "file"),
           });
           turn.tools.delete(event.data.id);
           return;
@@ -2575,6 +2616,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             yield* emitTool(state, turn, part.id, "completed", {
               output: textOf(part.state.content),
               metadata: part.state.metadata,
+              files: part.state.content.filter((part) => part.type === "file"),
             });
             turn.tools.delete(part.id);
           } else if (part.state.status === "error") {

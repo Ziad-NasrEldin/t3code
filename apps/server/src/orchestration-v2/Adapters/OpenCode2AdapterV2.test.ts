@@ -1,4 +1,5 @@
 import * as NodeURL from "node:url";
+import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -415,6 +416,89 @@ const history = {
 };
 
 it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
+  it.effect.each(["custom", "bash", "apply_patch", "grep"])(
+    "preserves %s tool result files in their tool item",
+    (toolName) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const attachmentsDir = yield* fs.makeTempDirectoryScoped();
+        const tool = { sessionID: SESSION, assistantMessageID: "msg_tool", id: "call-file" };
+        const { runtime, thread } = yield* resumed(
+          [
+            out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+            promptAccepted,
+            event("session.execution.started", { sessionID: SESSION }),
+            event("session.tool.input.started", { ...tool, name: toolName }),
+            {
+              type: "emit_inbound",
+              frame: {
+                type: "sdk.event",
+                event: {
+                  id: "evt_tool_file",
+                  created: 1,
+                  type: "session.tool.success",
+                  data: {
+                    ...tool,
+                    content: [
+                      { type: "text", text: "result text" },
+                      {
+                        type: "file",
+                        uri: "data:text/plain;base64,aGVsbG8=",
+                        mime: "text/plain",
+                        name: "hello.txt",
+                      },
+                      {
+                        type: "file",
+                        uri: "https://untrusted.invalid/no.txt",
+                        mime: "text/plain",
+                        name: "no.txt",
+                      },
+                    ],
+                    executed: true,
+                  },
+                  durable: { aggregateID: SESSION, seq: 1, version: 2 },
+                },
+              },
+            },
+            event("session.execution.succeeded", { sessionID: SESSION }),
+          ],
+          { attachmentsDir },
+        );
+        const collected = yield* runtime.events.pipe(
+          Stream.takeUntil((entry) => entry.type === "turn.terminal"),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* runtime.startTurn(turnInput(thread));
+        const seen = yield* Fiber.join(collected);
+        const item = seen.find(
+          (entry) => entry.type === "turn_item.updated" && entry.turnItem.status === "completed",
+        );
+        assert.isDefined(item);
+        if (item?.type !== "turn_item.updated") return;
+        if (item.turnItem.type === "dynamic_tool" || item.turnItem.type === "command_execution")
+          assert.equal(item.turnItem.output, "result text");
+        assert.deepEqual(item.turnItem.outputAttachmentErrors, [
+          "[Attachment unavailable: no.txt]",
+        ]);
+        const attachment = item.turnItem.outputAttachments?.[0];
+        assert.isDefined(attachment);
+        assert.equal(attachment!.name, "hello.txt");
+        const storedPath = resolveAttachmentPathById({
+          attachmentsDir,
+          attachmentId: attachment!.id,
+        });
+        assert.isNotNull(storedPath);
+        assert.equal(yield* fs.readFileString(storedPath!), "hello");
+        assert.notMatch(JSON.stringify(item), /aGVsbG8=/);
+        assert.isFalse(
+          seen.some(
+            (entry) => entry.type === "message.updated" && entry.message.attachments.length > 0,
+          ),
+        );
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("switches the session's model and variant before a turn that changed them", () =>
     Effect.gen(function* () {
       const { runtime, thread } = yield* resumed([
@@ -2382,19 +2466,48 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
 
   it.effect("keeps a turn still running after a reconnect open for its next events", () =>
     Effect.gen(function* () {
-      const { runtime, thread } = yield* resumed([
-        out("session.prompt", { sessionID: SESSION, id: PROMPT_ID, text: "<any>" }),
-        promptAccepted,
-        ...reconnected({ [SESSION]: { type: "running" } }),
-        ...openRequests([]),
-        event("session.text.ended", {
-          sessionID: SESSION,
-          assistantMessageID: "msg_assistant_after",
-          ordinal: 0,
-          text: "Arrived on the new stream.",
-        }),
-        event("session.execution.succeeded", { sessionID: SESSION }),
-      ]);
+      const fs = yield* FileSystem.FileSystem;
+      const attachmentsDir = yield* fs.makeTempDirectoryScoped();
+      const { runtime, thread } = yield* resumed(
+        [
+          out("session.prompt", { sessionID: SESSION, id: PROMPT_ID, text: "<any>" }),
+          promptAccepted,
+          ...reconnected({ [SESSION]: { type: "running" } }, undefined, {
+            content: [
+              { type: "text", text: "Sent while the stream was down." },
+              {
+                type: "tool",
+                id: "call_gap",
+                name: "custom",
+                executed: true,
+                state: {
+                  status: "completed",
+                  input: {},
+                  content: [
+                    {
+                      type: "file",
+                      uri: "data:text/plain;base64,Z2Fw",
+                      mime: "text/plain",
+                      name: "gap.txt",
+                    },
+                  ],
+                  metadata: {},
+                },
+                time: { created: 2, ran: 2, completed: 2 },
+              },
+            ],
+          }),
+          ...openRequests([]),
+          event("session.text.ended", {
+            sessionID: SESSION,
+            assistantMessageID: "msg_assistant_after",
+            ordinal: 0,
+            text: "Arrived on the new stream.",
+          }),
+          event("session.execution.succeeded", { sessionID: SESSION }),
+        ],
+        { attachmentsDir },
+      );
       const events = yield* runtime.events.pipe(
         Stream.takeUntil((event) => event.type === "turn.terminal"),
         Stream.runCollect,
@@ -2411,8 +2524,15 @@ it.layer(McpProviderSessions.layer)("OpenCode2 adapter", (it) => {
         "Sent while the stream was down.",
         "Arrived on the new stream.",
       ]);
+      const restoredFile = collected.flatMap((event) =>
+        event.type === "turn_item.updated" ? (event.turnItem.outputAttachments ?? []) : [],
+      );
+      assert.equal(restoredFile.length, 1);
+      const path = resolveAttachmentPathById({ attachmentsDir, attachmentId: restoredFile[0]!.id });
+      assert.isNotNull(path);
+      assert.equal(yield* fs.readFileString(path!), "gap");
       assert.deepInclude(collected.at(-1), { type: "turn.terminal", status: "completed" });
-    }).pipe(Effect.scoped),
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 
   it.effect("shows a permission asked while the stream was down, and answers it", () =>

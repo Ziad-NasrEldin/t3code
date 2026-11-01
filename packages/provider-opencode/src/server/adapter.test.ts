@@ -264,6 +264,10 @@ describe("OpenCodeAdapterV2", () => {
         filename: "result.txt",
         url: "data:text/plain;base64,T2ZmaWNlIHJlc3VsdA==",
       };
+      const parts: Array<
+        | typeof part
+        | { id: string; sessionID: string; messageID: string; type: "text"; text: string }
+      > = [part];
       const info = {
         id: part.messageID,
         sessionID: root,
@@ -281,7 +285,7 @@ describe("OpenCodeAdapterV2", () => {
             promptAsync: async () => ({ data: true }),
             get: async () => ({ data: { id: root, time: { created: 1, updated: 2 } } }),
             children: async () => ({ data: [] }),
-            messages: async () => ({ data: [{ info, parts: [part] }] }),
+            messages: async () => ({ data: [{ info, parts }] }),
           },
         },
         { resolveAttachmentPath: (attachment) => path.join(directory, `${attachment.id}.txt`) },
@@ -299,9 +303,40 @@ describe("OpenCodeAdapterV2", () => {
         events.push({ type: "message.updated", properties: { sessionID: root, info } }),
       );
       yield* Effect.promise(() =>
+        events.push({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: "tool-with-file",
+              sessionID: root,
+              messageID: part.messageID,
+              type: "tool",
+              callID: "tool-call",
+              tool: "custom",
+              state: {
+                status: "completed",
+                input: {},
+                output: "tool result",
+                title: "Custom",
+                metadata: {},
+                time: { start: 1, end: 2 },
+                attachments: [{ ...part, id: "tool-file-part" }],
+              },
+            },
+          },
+        }),
+      );
+      yield* Effect.promise(() =>
         events.push({ type: "session.idle", properties: { sessionID: root } }),
       );
       const output = yield* Fiber.join(collected);
+      const toolEvent = output.find(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+      );
+      assert.isDefined(toolEvent);
+      if (toolEvent?.type === "turn_item.updated") {
+        assert.equal(toolEvent.turnItem.outputAttachments?.[0]?.name, "result.txt");
+      }
       const finals = output.flatMap((event) =>
         event.type === "message.updated" &&
         event.message.role === "assistant" &&
@@ -313,6 +348,8 @@ describe("OpenCodeAdapterV2", () => {
       assert.isDefined(final);
       assert.equal(final!.attachments.length, 1);
       const attachment = final!.attachments[0]!;
+      if (toolEvent?.type === "turn_item.updated")
+        assert.notEqual(toolEvent.turnItem.outputAttachments?.[0]?.id, attachment.id);
       assert.match(attachment.id, /-txt$/);
       assert.equal(
         yield* fs.readFileString(path.join(directory, `${attachment.id}.txt`)),
@@ -325,11 +362,21 @@ describe("OpenCodeAdapterV2", () => {
       assert.equal(snapshot.messages[0]!.id, final!.id);
       assert.deepEqual(snapshot.messages[0]!.attachments, final!.attachments);
       assert.equal(snapshot.messages[0]!.responseKind, "final");
-      const repeated = yield* harness.runtime.readThreadSnapshot({
-        providerThread: harness.providerThread,
-      });
+      const repeated = yield* harness.runtime
+        .readThreadSnapshot({
+          providerThread: harness.providerThread,
+        })
+        .pipe(Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})));
       assert.deepEqual(repeated.messages, snapshot.messages);
-      assert.deepEqual(yield* fs.readDirectory(directory), [`${attachment.id}.txt`]);
+      const toolId =
+        toolEvent?.type === "turn_item.updated"
+          ? toolEvent.turnItem.outputAttachments?.[0]?.id
+          : undefined;
+      assert.deepEqual(
+        (yield* fs.readDirectory(directory)).sort(),
+        [`${attachment.id}.txt`, `${toolId}.txt`].sort(),
+      );
+      yield* fs.remove(path.join(directory, `${toolId}.txt`));
       yield* fs.writeFileString(path.join(directory, `${attachment.id}.txt`), "Wrong content");
       const collision = yield* harness.runtime.readThreadSnapshot({
         providerThread: harness.providerThread,
@@ -384,6 +431,27 @@ describe("OpenCodeAdapterV2", () => {
           path.join(directory, `${changed.messages[0]!.attachments[0]!.id}.txt`),
         ),
         "Changed",
+      );
+      parts.splice(
+        0,
+        parts.length,
+        { id: "before", sessionID: root, messageID: part.messageID, type: "text", text: "before" },
+        part,
+        { id: "after", sessionID: root, messageID: part.messageID, type: "text", text: "after" },
+      );
+      const mixed = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.deepEqual(
+        mixed.messages.map((message) => [
+          message.text,
+          message.attachments.map((file) => file.name),
+        ]),
+        [
+          ["before", []],
+          ["", ["result.txt"]],
+          ["after", []],
+        ],
       );
     }).pipe(
       Effect.provide([NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer]),

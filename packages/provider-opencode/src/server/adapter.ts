@@ -14,6 +14,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import {
   defaultInstanceIdForDriver,
+  type ChatAttachment,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
@@ -42,6 +43,7 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
@@ -79,7 +81,7 @@ import {
   makeSubagentChildThread,
   subagentThreadTitle,
 } from "@t3tools/provider-core/server/subagentProjection";
-import { captureOutputAttachment } from "./outputAttachment.ts";
+import { captureToolOutputAttachments, captureOutputAttachment } from "./outputAttachment.ts";
 import { openCodeToolTurnItem } from "./toolItems.ts";
 
 export const OPENCODE_PROVIDER = ProviderDriverKind.make("opencode");
@@ -352,6 +354,10 @@ export const reconcileOpenCodePromptAdmissionStatus = Effect.fn(
 });
 
 interface OpenCodeSubagentContext {
+  outputFiles?: {
+    readonly outputAttachments?: ReadonlyArray<ChatAttachment>;
+    readonly outputAttachmentErrors?: ReadonlyArray<string>;
+  };
   task?: OrchestrationV2Subagent;
   readonly nativeItemId: string;
   readonly nodeId: OrchestrationV2Subagent["id"];
@@ -919,6 +925,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
   const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
+  const attachmentFileSystem = yield* Effect.serviceOption(FileSystem.FileSystem);
+  const withAttachmentStorage = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    Option.isSome(attachmentFileSystem)
+      ? effect.pipe(Effect.provideService(FileSystem.FileSystem, attachmentFileSystem.value))
+      : effect;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const messageIdClock = yield* Ref.make({ epochMillis: -1, counter: 0 });
 
@@ -1185,7 +1196,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             return;
           const content =
             part.type === "file"
-              ? yield* captureOutputAttachment(host, turn.threadId, part)
+              ? yield* withAttachmentStorage(captureOutputAttachment(host, turn.threadId, part))
               : { text: part.text, attachments: [] };
           if (content.text.length === 0 && content.attachments.length === 0) return;
           const time = "time" in part ? part.time : undefined;
@@ -1439,6 +1450,15 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
             });
           }
           const output = toolOutput(part);
+          if (part.state.status === "completed")
+            context.outputFiles = yield* withAttachmentStorage(
+              captureToolOutputAttachments(
+                host,
+                turn.threadId,
+                part.id,
+                part.state.attachments ?? [],
+              ),
+            );
           if (part.state.status === "completed" && output !== undefined) context.result = output;
           const status = toolStatus(part);
           const completedAt = toolCompletedAt(part, now);
@@ -1517,6 +1537,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               startedAt: context.startedAt,
               completedAt,
               updatedAt: now,
+              ...context.outputFiles,
               type: "subagent",
               subagentId: nodeId,
               origin: "provider_native",
@@ -1587,6 +1608,14 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           >;
           const input = toolInput(part);
           const output = toolOutput(part);
+          const attachments = yield* withAttachmentStorage(
+            captureToolOutputAttachments(
+              host,
+              turn.threadId,
+              part.id,
+              part.state.status === "completed" ? (part.state.attachments ?? []) : [],
+            ),
+          );
           const isNativeTool = part.tool === "code_search" || part.tool === "apply_patch";
           if (!isNativeTool && part.tool.includes("_") && turn.mcpServerNames === undefined) {
             const serverNames = yield* OpenCodeRuntime.runOpenCodeSdk("mcp.status", (signal) =>
@@ -1614,19 +1643,23 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           const turnItem: OrchestrationV2TurnItem = matchingServers?.length
             ? {
                 ...base,
+                ...attachments,
                 type: "dynamic_tool",
                 ...presentation,
                 toolName: part.tool,
                 input,
                 ...(output === undefined ? {} : { output }),
               }
-            : openCodeToolTurnItem(base, {
-                name: part.tool,
-                input,
-                output,
-                completedMetadata:
-                  part.state.status === "completed" ? part.state.metadata : undefined,
-              });
+            : openCodeToolTurnItem(
+                { ...base, ...attachments },
+                {
+                  name: part.tool,
+                  input,
+                  output,
+                  completedMetadata:
+                    part.state.status === "completed" ? part.state.metadata : undefined,
+                },
+              );
           yield* emitProviderEvent({
             type: "node.updated",
             driver: OPENCODE_PROVIDER,
@@ -2959,20 +2992,32 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   ? dateTimeFromEpoch(info.time.completed, createdAt)
                   : createdAt,
             };
-            if (text.length > 0) messages.push(base);
-            if (info.role === "assistant")
-              for (const part of parts) {
-                if (part.type !== "file") continue;
-                const content = yield* captureOutputAttachment(host, base.threadId, part);
-                messages.push({
-                  ...base,
-                  id: idAllocator.derive.messageFromProviderItem({
-                    driver: OPENCODE_PROVIDER,
-                    nativeItemId: part.id,
-                  }),
-                  ...content,
-                });
-              }
+            const hasAssistantFiles =
+              info.role === "assistant" && parts.some((part) => part.type === "file");
+            if (!hasAssistantFiles) {
+              if (text.length > 0) messages.push(base);
+              continue;
+            }
+            for (const part of parts) {
+              const content =
+                part.type === "file"
+                  ? yield* withAttachmentStorage(captureOutputAttachment(host, base.threadId, part))
+                  : part.type === "text" &&
+                      part.ignored !== true &&
+                      part.synthetic !== true &&
+                      part.text.length > 0
+                    ? { text: part.text, attachments: [] }
+                    : undefined;
+              if (!content) continue;
+              messages.push({
+                ...base,
+                id: idAllocator.derive.messageFromProviderItem({
+                  driver: OPENCODE_PROVIDER,
+                  nativeItemId: part.id,
+                }),
+                ...content,
+              });
+            }
           }
           const lastUser = nativeMessages.findLast(({ info }) => info.role === "user")?.info.id;
           return {

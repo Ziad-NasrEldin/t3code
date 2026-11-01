@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import { createDeterministicAttachmentId } from "../attachmentStore.ts";
 
 const layerDatabase = Layer.mergeAll(
   SqlitePersistence.layerMemory,
@@ -262,6 +263,14 @@ it.effect.each(["sqlite"] as const)(
         const sql = yield* SqlClient.SqlClient;
         yield* sql`UPDATE orchestration_v2_projection_messages SET payload_json = json_object('text', ${"x".repeat(512_000)}, 'attachments', json_array(json_object('id', 'attachment:old'))) WHERE message_id = 'obsolete-history'`;
         assert.deepEqual(yield* store.getThreadAttachmentIds(threadId), ["attachment:old"]);
+        const toolFileId = createDeterministicAttachmentId(threadId, "tool-file")!;
+        const sourceFileId = createDeterministicAttachmentId("source-thread", "borrowed-file")!;
+        yield* sql`UPDATE orchestration_v2_projection_turn_items SET payload_json = json_set(payload_json, '$.outputAttachments', json_array(json_object('id', ${toolFileId}), json_object('id', ${sourceFileId}))) WHERE thread_id = ${threadId}`;
+        assert.sameMembers(
+          [...(yield* store.getThreadAttachmentIds(threadId))],
+          ["attachment:old", toolFileId],
+        );
+        yield* sql`UPDATE orchestration_v2_projection_turn_items SET payload_json = json_remove(payload_json, '$.outputAttachments') WHERE thread_id = ${threadId}`;
       }
       const page = yield* store.getTimelinePage(threadId, { view: "activity", limit: 1 });
       assert.deepEqual(
