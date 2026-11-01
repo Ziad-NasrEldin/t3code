@@ -815,6 +815,22 @@ export class OfficeMotion {
     life.performanceTime = 0;
     this.publish();
   }
+  private recoverTraffic() {
+    const waiting = [...this.lives.values()].filter((life) => life.route.length > 0);
+    // A delayed passage invalidates its followers' timings; retain actual occupancy while rebooking.
+    for (const life of waiting)
+      this.traffic.plan(
+        life.key,
+        life.position,
+        life.route,
+        life.requested !== null,
+        life.requested
+          ? [...this.itemBoxes.values()].find((item) => item.owner === life.key)?.box
+          : undefined,
+        { ...this.travelShape(life, life.route.at(-1)!), source: lifeBodyBox(life) },
+      );
+    for (const life of waiting) this.traffic.hold(life.key, life.position, lifeBodyBox(life));
+  }
   tick(delta: number, reduced: boolean): boolean {
     this.traffic.beginFrame(delta);
     this.bodies.clear();
@@ -822,6 +838,7 @@ export class OfficeMotion {
     for (const life of this.lives.values()) this.indexBody(life);
     let moving = false;
     let changedCell = false;
+    let delayed = false;
     for (const life of this.lives.values()) {
       const cell = `${Math.floor(life.position.x / 12)}:${0}:${Math.floor(life.position.z / 12)}`;
       if (cell !== life.renderCell) {
@@ -861,6 +878,7 @@ export class OfficeMotion {
       if (life.route.length > 0) {
         moving = true;
         if (!this.claimTraffic(life)) {
+          delayed ||= this.traffic.active(life.key);
           life.routeBlocked = true;
           continue;
         }
@@ -880,7 +898,10 @@ export class OfficeMotion {
             lifeBodyBox(life, next, last ? this.arrivalHeading(life) : heading, !last),
           );
           life.routeBlocked = blocked;
-          if (blocked) break;
+          if (blocked) {
+            delayed = true;
+            break;
+          }
           life.position.copy(next);
           life.heading = heading;
           budget -= length;
@@ -950,6 +971,7 @@ export class OfficeMotion {
         }
       } else life.phase = "rest";
     }
+    if (delayed) this.recoverTraffic();
     if (changedCell) this.publish();
     return moving;
   }

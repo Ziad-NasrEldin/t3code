@@ -604,6 +604,87 @@ it("reserves a clear alternative atomically without retaining rejected paths", (
   expect(traffic.claim("cancelled-path-crossing", () => false)).toBe(true);
 });
 
+it("retires stale bookings after a blocked leader and resumes from retained body holds", () => {
+  const motion = new OfficeMotion();
+  const control = motion as unknown as {
+    traffic: CorridorTraffic;
+    setRoute(life: Life, route: readonly Vector3[]): void;
+  };
+  const point = (x: number, z: number) => new Vector3(x, 0.07, z);
+  const worker = (key: string) => ({ ...actor, key, status: "working" as const });
+  const leader = motion.add(worker("delayed-leader"), siteAt(0), "atlas", 0, {
+    site: null,
+    slot: 0,
+  });
+  const follower = motion.add(worker("booked-follower"), siteAt(1), "atlas", 0, {
+    site: null,
+    slot: 1,
+  });
+  leader.position.copy(point(-20, 0));
+  follower.position.copy(point(0, -20));
+  control.setRoute(leader, [point(30, 0)]);
+  motion.tick(0.1, true);
+  control.setRoute(follower, [point(0, 30)]);
+  motion.tick(0.1, true);
+  expect(control.traffic.reserved(leader.key)).toBe(true);
+  expect(control.traffic.reserved(follower.key)).toBe(true);
+  const obstruction = motion.add(worker("obstruction"), siteAt(2), "atlas", 0, {
+    site: null,
+    slot: 2,
+  });
+  obstruction.position.copy(point(4, 0));
+  let stopped = false;
+  for (let step = 0; step < 600; step++) {
+    motion.tick([0.03, 0.1, 0.07, 0.05][step % 4]!, true);
+    expect(boxesOverlap(lifeBodyBox(leader), lifeBodyBox(follower))).toBe(false);
+    if (leader.routeBlocked) {
+      stopped = true;
+      break;
+    }
+  }
+  expect(stopped).toBe(true);
+  expect(control.traffic.reserved(leader.key)).toBe(false);
+  expect(control.traffic.reserved(follower.key)).toBe(false);
+  expect(control.traffic.busy(lifeBodyBox(leader), "probe")).toBe(true);
+  const held = [leader.position.clone(), follower.position.clone()];
+  motion.update({ ...leader.actor, status: "offline" });
+  motion.update({ ...follower.actor, status: "offline" });
+  for (let step = 0; step < 20; step++) motion.tick(0.05, true);
+  expect(leader.position).toEqual(held[0]);
+  expect(follower.position).toEqual(held[1]);
+  motion.update(worker(leader.key));
+  motion.update(worker(follower.key));
+  motion.remove(obstruction.key);
+  for (let step = 0; step < 1800 && (leader.route.length || follower.route.length); step++) {
+    motion.tick([0.03, 0.1, 0.07, 0.05][step % 4]!, true);
+    expect(boxesOverlap(lifeBodyBox(leader), lifeBodyBox(follower))).toBe(false);
+  }
+  expect(leader.position).toEqual(point(30, 0));
+  expect(follower.position).toEqual(point(0, 30));
+  expect(motion.lives.size).toBe(2);
+  motion.clear();
+  expect(control.traffic.busy(lifeBodyBox(leader), "probe")).toBe(false);
+
+  const traffic = new CorridorTraffic();
+  const footprint = { min: [-3, -3], max: [3, 3] } as const;
+  const edge = { min: [-1, 2], max: [1, 2.5] } as const;
+  traffic.plan("held-worker", point(0, 0), [point(20, 0)], false, undefined, {
+    side: 1,
+    front: 1,
+    source: footprint,
+    target: { min: [19, -1], max: [21, 1] },
+  });
+  traffic.hold("held-worker", point(0, 0), footprint);
+  traffic.beginFrame();
+  expect(traffic.redirect("held-worker", point(0, 0), [point(0, 20)], () => true)).toBe(false);
+  expect(traffic.busy(edge, "probe")).toBe(true);
+  traffic.beginFrame();
+  expect(traffic.claim("held-worker", () => false)).toBe(true);
+  expect(traffic.busy(edge, "probe")).toBe(false);
+  traffic.clear();
+  expect(traffic.busy(footprint, "probe")).toBe(false);
+});
+
 it("retains and advances all 750 logical occupants with compact routes, then clears every reservation", () => {
   const actors: OfficeActor[] = Array.from({ length: 750 }, (_, i) => ({
     ...actor,

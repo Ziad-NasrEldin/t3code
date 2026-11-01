@@ -279,6 +279,17 @@ export class CorridorTraffic {
     const departure = this.plans.get(key)?.departure;
     return departure !== null && departure !== undefined && departure <= this.now;
   }
+  hold(key: string, at: Vector3, box: Obstacle) {
+    const previous = this.parked.get(key);
+    if (previous) {
+      this.changed(previous.box);
+      this.index.delete(previous);
+    }
+    const hold = stationary(key, at, this.now, Infinity, box);
+    this.parked.set(key, hold);
+    this.index.set(hold, hold.box);
+    this.changed(hold.box);
+  }
   reserved(key: string) {
     return this.plans.get(key)?.departure !== null && this.plans.has(key);
   }
@@ -318,6 +329,7 @@ export class CorridorTraffic {
         const hold = stationary(key, source, this.now, departure, plan.shape?.source);
         if (
           [...this.index.query(hold.box)].some((other) => {
+            if (other.owner === key) return false;
             const interval = conflict(hold, other);
             return interval && interval[0] <= 0 && interval[1] >= 0;
           })
@@ -351,6 +363,12 @@ export class CorridorTraffic {
     plan.candidates = [plan.segments];
     const source = plan.segments[0]?.start,
       last = plan.segments.at(-1);
+    const held = this.parked.get(key);
+    if (held) {
+      this.changed(held.box);
+      this.index.delete(held);
+      this.parked.delete(key);
+    }
     plan.departure = departure;
     for (const segment of plan.segments) {
       segment.begin += departure;
@@ -414,6 +432,7 @@ export class CorridorTraffic {
     shape?: TravelShape,
   ) {
     const previous = this.plans.get(key);
+    const held = this.parked.get(key);
     if (!previous) return false;
     if (this.preparing) return false;
     this.plan(key, start, route, false, previous.zone, shape ?? previous.shape);
@@ -423,6 +442,10 @@ export class CorridorTraffic {
     this.remove(key);
     this.plans.set(key, previous);
     for (const reservation of previous.reservations) this.index.set(reservation, reservation.box);
+    if (held) {
+      this.parked.set(key, held);
+      this.index.set(held, held.box);
+    }
     return false;
   }
   arrive(key: string) {
