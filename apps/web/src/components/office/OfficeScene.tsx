@@ -9,11 +9,13 @@ import {
   type RefObject,
 } from "react";
 import {
+  AgXToneMapping,
+  DirectionalLight,
   Group,
   Mesh,
   Object3D,
+  PCFSoftShadowMap,
   Vector3,
-  ACESFilmicToneMapping,
   SRGBColorSpace,
   type Texture,
 } from "three";
@@ -37,6 +39,8 @@ import {
   resetActorLifecycle,
   advanceActorFrame,
   connectOfficeControls,
+  configureKeyLightShadow,
+  configureStudioEnvironment,
   focusOfficeCamera,
   markPerformanceReady,
   rememberOfficeAsset,
@@ -48,6 +52,7 @@ import {
   advancePerformance,
   createPerformanceInstance,
 } from "./officeRenderer";
+import { enhanceRoomScene } from "./officeEffects";
 import { interiorOffset } from "./officeInterior";
 import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
@@ -122,18 +127,53 @@ function disposeSkeletons(root: Object3D) {
   });
 }
 
-function StaticAsset({ name, onPick }: { name: string; onPick?: (object: Object3D) => void }) {
+function StaticAsset({
+  name,
+  southOpen = false,
+  onPick,
+}: {
+  name: string;
+  southOpen?: boolean;
+  onPick?: (object: Object3D) => void;
+}) {
   const asset = useAsset(name);
-  const [root] = useState(() => {
+  const [instance] = useState(() => {
     const root = clone(asset.scene);
     root.traverse((object) => {
       object.position.x += interiorOffset(name, object.name);
+      if (southOpen) {
+        const n = object.name.toLowerCase();
+        if (n.includes("back_wall") || n.includes("back wall")) {
+          object.scale.y = 0.3;
+          object.position.y = 0.38;
+        } else if (n.includes("back_cap") || n.includes("back cap")) {
+          object.position.y = 0.78;
+        } else if (
+          n.includes("identity_band") ||
+          n.includes("identity band") ||
+          n.includes("__sign") ||
+          n.includes(" / sign") ||
+          n.includes("presentation_panel") ||
+          n.includes("presentation panel") ||
+          n.includes("large_study") ||
+          n.includes("large study") ||
+          n.includes("pin_wall") ||
+          n.includes("pin wall") ||
+          n.includes("pin_card") ||
+          n.includes("pin card")
+        ) {
+          object.visible = false;
+        }
+      }
     });
-    return root;
+    const dispose = enhanceRoomScene(root, name);
+    return { root, dispose };
   });
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- releases cloned room materials and foliage meshes on unmount
+  useEffect(() => () => instance.dispose(), [instance]);
   return (
     <primitive
-      object={root}
+      object={instance.root}
       dispose={null}
       onClick={
         onPick
@@ -144,6 +184,79 @@ function StaticAsset({ name, onPick }: { name: string; onPick?: (object: Object3
           : undefined
       }
     />
+  );
+}
+function RestTerrace() {
+  return (
+    <group>
+      <mesh position={[0, -0.28, 0]} receiveShadow castShadow>
+        <boxGeometry args={[12, 0.56, 11]} />
+        <meshStandardMaterial color={OFFICE_COLORS.plinth} roughness={0.55} />
+      </mesh>
+      <mesh position={[0, 0.015, 0]} receiveShadow>
+        <boxGeometry args={[11.4, 0.07, 10.4]} />
+        <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.8} />
+      </mesh>
+      <mesh position={[0, 0.06, 0]} receiveShadow>
+        <boxGeometry args={[8.6, 0.05, 6.2]} />
+        <meshStandardMaterial color={OFFICE_COLORS.boucle} roughness={0.94} />
+      </mesh>
+      <mesh position={[0, 0.38, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.42, 0.5, 0.68, 24]} />
+        <meshStandardMaterial color={OFFICE_COLORS.plinth} roughness={0.55} />
+      </mesh>
+      <mesh position={[0, 0.76, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[1.25, 1.25, 0.14, 32]} />
+        <meshStandardMaterial color={OFFICE_COLORS.wood} roughness={0.42} />
+      </mesh>
+      <mesh position={[-0.28, 0.86, 0.1]} castShadow receiveShadow>
+        <boxGeometry args={[0.62, 0.07, 0.48]} />
+        <meshStandardMaterial color={OFFICE_COLORS.plinth} roughness={0.4} />
+      </mesh>
+      <mesh position={[0.35, 0.92, -0.15]} castShadow receiveShadow>
+        <cylinderGeometry args={[0.16, 0.14, 0.26, 18]} />
+        <meshStandardMaterial color={0xfaf6ec} roughness={0.22} />
+      </mesh>
+      {([-5.8, 5.8] as const).map((px) => (
+        <group key={px}>
+          <mesh position={[px, 0.36, 0]} castShadow receiveShadow>
+            <boxGeometry args={[0.26, 0.72, 10.6]} />
+            <meshStandardMaterial color={OFFICE_COLORS.plinth} roughness={0.55} />
+          </mesh>
+          <mesh position={[px, 0.74, 0]} castShadow receiveShadow>
+            <boxGeometry args={[0.32, 0.08, 10.7]} />
+            <meshStandardMaterial color={OFFICE_COLORS.wood} roughness={0.45} />
+          </mesh>
+        </group>
+      ))}
+      {([-4.7, 4.7] as const).map((px) => (
+        <group key={px} position={[px, 0, -3.8]}>
+          <mesh position={[0, 0.34, 0]} castShadow receiveShadow>
+            <cylinderGeometry args={[0.42, 0.34, 0.68, 20]} />
+            <meshStandardMaterial color={OFFICE_COLORS.terracotta} roughness={0.36} />
+          </mesh>
+          {[0, 1, 2, 3, 4, 5, 6].map((i) => {
+            const a = i * 2.35;
+            return (
+              <mesh
+                key={i}
+                position={[Math.cos(a) * 0.44, 0.92 + (i % 3) * 0.18, Math.sin(a) * 0.44]}
+                rotation={[0.35 * Math.sin(a), -a, 0.35 * Math.cos(a)]}
+                scale={[0.25, 0.09, 0.46]}
+                castShadow
+                receiveShadow
+              >
+                <sphereGeometry args={[1, 14, 10]} />
+                <meshStandardMaterial
+                  color={i % 2 === 0 ? OFFICE_COLORS.foliage : OFFICE_COLORS.foliageLight}
+                  roughness={0.35}
+                />
+              </mesh>
+            );
+          })}
+        </group>
+      ))}
+    </group>
   );
 }
 function ProjectRoom({
@@ -182,13 +295,11 @@ function ProjectRoom({
       rotation={[0, roomRotation(room.site, room.variant), 0]}
     >
       {room.projectId === null ? (
-        <mesh position={[0, -0.18, 0]}>
-          <boxGeometry args={[12, 0.35, 11]} />
-          <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
-        </mesh>
+        <RestTerrace />
       ) : (
         <StaticAsset
           name={room.variant}
+          southOpen={Math.cos(roomRotation(room.site, room.variant)) < -0.5}
           onPick={(object) => {
             if (
               object.name.toLowerCase().includes("keyboard") ||
@@ -209,13 +320,13 @@ function LoopFloor({ rings }: { rings: number }) {
           <group key={i}>
             {([-1, 1] as const).map((sign) => (
               <group key={sign}>
-                <mesh position={[0, -0.18, sign * ringSize(i)[1]]}>
+                <mesh position={[0, -0.18, sign * ringSize(i)[1]]} receiveShadow>
                   <boxGeometry args={[ringSize(i)[0] * 2 + 3, 0.35, 3]} />
-                  <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
+                  <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.72} />
                 </mesh>
-                <mesh position={[sign * ringSize(i)[0], -0.18, 0]}>
+                <mesh position={[sign * ringSize(i)[0], -0.18, 0]} receiveShadow>
                   <boxGeometry args={[3, 0.35, ringSize(i)[1] * 2 + 3]} />
-                  <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
+                  <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.72} />
                 </mesh>
               </group>
             ))}
@@ -223,9 +334,10 @@ function LoopFloor({ rings }: { rings: number }) {
               <mesh
                 key={`${a[0]}:${a[1]}:${b[0]}:${b[1]}`}
                 position={[(a[0] + b[0]) / 2, -0.18, (a[1] + b[1]) / 2]}
+                receiveShadow
               >
                 <boxGeometry args={[Math.abs(b[0] - a[0]) + 3, 0.35, Math.abs(b[1] - a[1]) + 3]} />
-                <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.9} />
+                <meshStandardMaterial color={OFFICE_COLORS.floor} roughness={0.72} />
               </mesh>
             ))}
           </group>
@@ -318,13 +430,16 @@ function Performance({ life, onReady }: { life: Life; onReady: () => void }) {
   const name = life.performance ?? "coffee",
     asset = useAsset(name),
     character = useAsset(PERFORMANCES[name].child ? "child" : "main");
-  const [instance] = useState(() => createPerformanceInstance(asset, character, name));
+  const [instance] = useState(() =>
+    createPerformanceInstance(asset, character, name, life.key, PERFORMANCES[name].child),
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- registers loaded animation readiness and disposes this independent animation mixer and skeleton on release
   useEffect(() => {
     onReady();
     return () => {
       instance.mixer.stopAllAction();
       instance.mixer.uncacheRoot(instance.root);
+      instance.dispose();
       disposeSkeletons(instance.root);
     };
   }, [instance, onReady]);
@@ -366,7 +481,9 @@ function ActorModel({
   const asset = useAsset(visual.actor.child ? "child" : "main"),
     group = useRef<Group>(null),
     ring = useRef<Mesh>(null);
-  const [instance] = useState(() => createActorInstance(asset));
+  const [instance] = useState(() =>
+    createActorInstance(asset, visual.actor.key, visual.actor.child),
+  );
   const performance = useSyncExternalStore(
     motion.subscribe,
     () => motion.performanceFor(life.key),
@@ -495,6 +612,8 @@ function Scene({
     },
     [textures],
   );
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- equips the scene with a studio reflection environment and disposes its render target on exit
+  useEffect(() => configureStudioEnvironment(gl, scene, textures), [gl, scene, textures]);
   const lives = useSyncExternalStore(motion.subscribe, motion.getSnapshot, motion.getSnapshot);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- lets newly mounted DOM anchors request one projection frame from the demand renderer
   useEffect(() => motion.connectGraphics(() => invalidate()), [motion, invalidate]);
@@ -534,8 +653,7 @@ function Scene({
             (life.route.length > 0 ||
               life.performance !== null ||
               life.requested !== null ||
-              (!reduced &&
-                ["working", "thinking", "waiting", "starting"].includes(life.actor.status))),
+              !reduced),
         );
       warmFrames.remaining = Math.max(0, warmFrames.remaining - 1);
       if (animating) invalidate();
@@ -589,16 +707,31 @@ function Scene({
     onVisible(actorKeys, roomKeys);
   }, [actorKeys, roomKeys, onVisible]);
   const maxRing = Math.max(0, ...rooms.map((room) => room.site.ring));
+  const keyLightRef = useRef<DirectionalLight>(null);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- updates the orthographic shadow camera frustum once mounted so directional shadows cover the full courtyard
+  useLayoutEffect(() => {
+    configureKeyLightShadow(keyLightRef.current);
+  }, []);
   return (
     <>
-      <color attach="background" args={["#526b70"]} />
-      <hemisphereLight args={["#e5f5ff", "#8c765d", 2.3]} />
-      <directionalLight position={[-15, 35, 18]} color={OFFICE_COLORS.key} intensity={3} />
-      <directionalLight position={[22, 24, 3]} color={OFFICE_COLORS.fill} intensity={2} />
+      <color attach="background" args={[OFFICE_COLORS.backdrop]} />
+      <hemisphereLight args={["#e4f2fa", "#b09e86", 1.65]} />
+      <directionalLight
+        ref={keyLightRef}
+        position={[-15, 35, 18]}
+        color={OFFICE_COLORS.key}
+        intensity={2.35}
+        castShadow={!lowQuality}
+        shadow-mapSize={[4096, 4096]}
+        shadow-bias={-0.00025}
+        shadow-normalBias={0.012}
+      />
+      <directionalLight position={[22, 24, 3]} color={OFFICE_COLORS.fill} intensity={1.55} />
+      <directionalLight position={[-8, 30, -25]} color={OFFICE_COLORS.rim} intensity={1.7} />
       <CameraController focus={focus} controlsRef={controlsRef} />
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.68, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.68, 0]} receiveShadow>
         <planeGeometry args={[400 + maxRing * 40, 400 + maxRing * 40]} />
-        <meshStandardMaterial color={OFFICE_COLORS.ground} roughness={1} />
+        <meshStandardMaterial color={OFFICE_COLORS.ground} roughness={0.96} />
       </mesh>
       <StaticAsset name="lobby" />
       <CupHome motion={motion} />
@@ -670,8 +803,10 @@ function OfficeCanvas({
       gl={{ antialias: !props.lowQuality, powerPreference: "low-power", alpha: false }}
       fallback={<p>Use the directory to open and control agents. WebGL is unavailable.</p>}
       onCreated={({ gl }) => {
-        gl.toneMapping = ACESFilmicToneMapping;
-        gl.toneMappingExposure = 1.25;
+        gl.shadowMap.enabled = !props.lowQuality;
+        gl.shadowMap.type = PCFSoftShadowMap;
+        gl.toneMapping = AgXToneMapping;
+        gl.toneMappingExposure = 1.15;
         gl.outputColorSpace = SRGBColorSpace;
         gl.domElement.addEventListener(
           "webglcontextlost",

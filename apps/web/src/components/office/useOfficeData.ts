@@ -121,6 +121,7 @@ export function useOfficeData(environmentId: EnvironmentId, supported: boolean, 
   const threads = [...byId.values()];
   return {
     actors: deriveOfficeActors(environmentId, threads, saved.children, online),
+    activeActors: deriveOfficeActors(environmentId, threads, saved.children, online, false),
     children: saved.children,
     threads,
     online,

@@ -87,6 +87,7 @@ import { UsagePriceOverrides } from "./UsagePriceOverrides";
 import { UsageProviderChart } from "./UsageProviderChart";
 import { SpeedPremium, UsageModelDialog } from "./UsageModelDialog";
 import { UsageShareBar } from "./UsageShareBar";
+import { TokenEconomizerPanel } from "./TokenEconomizerPanel";
 import {
   costTypeSegments,
   modelShare,
@@ -672,6 +673,15 @@ function UsageOverview({
   );
   const cursorInsertAt =
     Math.max(activeProviders.indexOf("codex"), activeProviders.indexOf("claude")) + 1;
+  const economizerSources = new Set<string>();
+  const economizerReports = hiddenProviders.has("codex")
+    ? []
+    : selectedEnvironments.flatMap((environment) => {
+        const report = environment.summary?.tokenEconomizer;
+        if (report === undefined || economizerSources.has(report.installationId)) return [];
+        economizerSources.add(report.installationId);
+        return [{ report, label: environment.label }];
+      });
   const summaryRows: ReadonlyArray<
     | { readonly kind: "usage"; readonly provider: UsageProviderKind }
     | { readonly kind: "enable"; readonly environment: EnvironmentUsageStatus }
@@ -829,6 +839,14 @@ function UsageOverview({
           />
         </div>
       </section>
+
+      {economizerReports.map(({ report, label }) => (
+        <TokenEconomizerPanel
+          key={report.installationId}
+          report={report}
+          environmentLabel={selectedEnvironments.length > 1 ? label : undefined}
+        />
+      ))}
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-medium text-foreground">Totals</h2>

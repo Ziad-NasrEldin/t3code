@@ -58,6 +58,21 @@ saved totals first, then updates them when Cursor's API responds.
 If recent work is missing or a new model shows no cost, refresh to rescan session history and
 update model pricing.
 
+## TokenEconomizer before and after
+
+Environments with a saved TokenEconomizer baseline show a **TokenEconomizer** graph below the
+main chart in **Usage → Cost** or **Tokens**. Choose a model to compare average input tokens per
+recorded session across your repositories. Cached input is included on both sides.
+
+Each row shows its before and after sample counts. A missing after sample stays **Pending**;
+it is never treated as zero usage. Percentages appear after at least five sessions on each side
+using the exact same model. The comparison covers recorded sessions since installation,
+independently of the Usage period above. Refresh Usage to load newly recorded sessions.
+
+Optimizer overhead is shown separately in weighted tokens. Session size and task difficulty can
+vary, so the graph is an observational efficiency comparison, not a financial ROI calculation
+or a reduction in your subscription bill.
+
 ## Set custom model prices
 
 On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,

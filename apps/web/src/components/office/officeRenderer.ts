@@ -1,38 +1,80 @@
 import {
   AnimationClip,
   AnimationMixer,
+  type DirectionalLight,
   Group,
   Mesh,
   Object3D,
   OrthographicCamera,
+  PMREMGenerator,
+  type Scene,
   Vector3,
   LoopRepeat,
   Texture,
   type WebGLRenderer,
   type Camera,
 } from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import type { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import type { RootState } from "@react-three/fiber";
-import { createSurfaceDust, makeLifecycleMaterials } from "./officeEffects";
+import {
+  applyActorThemeAndSilhouette,
+  createActorContactShadow,
+  createStatusIndicator,
+  createSurfaceDust,
+  enhanceRoomScene,
+  makeLifecycleMaterials,
+  pickCrewTheme,
+} from "./officeEffects";
 import type { VisualActor, OfficeFocus } from "./OfficeScene";
 import type { OfficeStatus } from "@t3tools/client-runtime/state/office";
 import type { Life } from "./officeMotion";
 export const OFFICE_COLORS = {
-  floor: 0xbbc6bb,
+  floor: 0x99a396,
+  plinth: 0xc9bfab,
+  wood: 0x6e401f,
+  woodLight: 0xa66e3b,
+  rug: 0x735c3d,
+  sage: 0x3d634d,
+  boucle: 0x9e8c63,
+  terracotta: 0xa64729,
+  foliage: 0x1a4f29,
+  foliageLight: 0x477833,
   lamp: 0xffcf82,
   selection: 0x79e0e5,
-  key: 0xffe1ba,
-  fill: 0xc4eaff,
-  ground: 0x455c61,
+  key: 0xffdeb0,
+  fill: 0xabdbfa,
+  rim: 0xffebcc,
+  ground: 0x365257,
+  backdrop: "#486368",
 };
-export function createActorInstance(asset: GLTF) {
+export function createActorInstance(asset: GLTF, actorKey = "default", child = false) {
   const root = clone(asset.scene);
+  const theme = pickCrewTheme(actorKey);
+  const disposeSilhouette = applyActorThemeAndSilhouette(root, theme, child);
+  const materials = makeLifecycleMaterials(root, theme);
+  const indicator = createStatusIndicator();
+  const shadow = createActorContactShadow(child);
+  root.add(indicator.group);
+  root.add(shadow.mesh);
+  let phase = 0;
+  for (let i = 0; i < actorKey.length; i++) phase = (phase * 31 + actorKey.charCodeAt(i)) % 997;
   return {
     root,
     mixer: new AnimationMixer(root),
-    materials: makeLifecycleMaterials(root),
+    materials: {
+      uniforms: materials.uniforms,
+      dispose: () => {
+        materials.dispose();
+        disposeSilhouette();
+        indicator.dispose();
+        shadow.dispose();
+      },
+    },
+    indicator,
+    phaseOffset: (phase % 37) * 0.09,
     elapsed: 0,
     lifecycleNotified: false,
     lifecycleGeneration: -1,
@@ -91,7 +133,12 @@ export function advanceActorFrame(
     instance.elapsed = 0;
   } else instance.elapsed += dt;
   root.position.copy(life.position);
-  root.rotation.y = life.heading;
+  if (life.walking || using || active === "sleeping") {
+    root.rotation.y = life.heading;
+  } else {
+    const facingBack = Math.cos(life.heading) < -0.25;
+    root.rotation.y = facingBack ? (life.position.x > 0 ? -0.32 : 0.32) : life.heading;
+  }
   const clipName = life.walking
     ? "Walk"
     : instance.wakeTransition > 0
@@ -115,23 +162,15 @@ export function advanceActorFrame(
       instance.mixer.stopAllAction();
       const action = instance.mixer.clipAction(clip);
       action.reset().setLoop(LoopRepeat, Infinity).play();
+      if (!reduced && (clipName === "Idle" || clipName === "Working" || clipName === "Thinking")) {
+        instance.mixer.setTime(instance.phaseOffset % Math.max(0.5, clip.duration));
+      }
     }
     instance.lastClip = clipName;
   }
-  if (
-    !using &&
-    !reduced &&
-    (life.route.length > 0 ||
-      active === "working" ||
-      active === "streaming" ||
-      active === "thinking" ||
-      active === "waiting" ||
-      instance.sleepTransition > 0 ||
-      instance.wakeTransition > 0 ||
-      instance.elapsed < 2)
-  )
-    instance.mixer.update(dt);
+  if (!using && !reduced && active !== "offline") instance.mixer.update(dt);
   else if (reduced) instance.mixer.setTime(active === "sleeping" ? 0.2 : 0);
+  instance.indicator.update(active, instance.elapsed, visual.actor.child);
   instance.materials.uniforms.uOfficeBase.value.copy(life.position);
   instance.materials.uniforms.uOfficeReveal.value =
     visual.transition === "arriving" && !reduced ? Math.min(1, instance.elapsed / 0.85) : 1;
@@ -166,7 +205,7 @@ export function advanceActorFrame(
   if (label) {
     const p = life.position
       .clone()
-      .add(new Vector3(0, visual.actor.child ? 3.5 : 4.3, 0))
+      .add(new Vector3(0, visual.actor.child ? 3.85 : 4.65, 0))
       .project(state.camera);
     const shown = Math.abs(p.x) < 1.15 && Math.abs(p.y) < 1.15 && Math.abs(p.z) < 1;
     label.hidden = !shown;
@@ -257,9 +296,40 @@ export function collectOfficeTextures(
     }
   });
 }
+export function configureStudioEnvironment(
+  renderer: WebGLRenderer,
+  scene: Scene,
+  textures: Set<Texture>,
+) {
+  const pmrem = new PMREMGenerator(renderer);
+  const envScene = new RoomEnvironment();
+  const target = pmrem.fromScene(envScene, 0.04);
+  scene.environment = target.texture;
+  scene.environmentIntensity = 0.28;
+  textures.add(target.texture);
+  envScene.dispose();
+  pmrem.dispose();
+  return () => {
+    if (scene.environment === target.texture) scene.environment = null;
+    target.dispose();
+  };
+}
+export function configureKeyLightShadow(light: DirectionalLight | null) {
+  if (!light) return;
+  light.shadow.camera.left = -38;
+  light.shadow.camera.right = 38;
+  light.shadow.camera.top = 38;
+  light.shadow.camera.bottom = -38;
+  light.shadow.camera.near = 4;
+  light.shadow.camera.far = 105;
+  light.shadow.camera.updateProjectionMatrix();
+  light.shadow.radius = 4.5;
+  light.shadow.needsUpdate = true;
+}
 export function createFurnitureInstance(asset: GLTF) {
   const root = clone(asset.scene),
     materials: import("three").Material[] = [];
+  const disposeEnhanced = enhanceRoomScene(root, "props");
   root.traverse((object) => {
     if (object instanceof Mesh && /bulb|brew_button|inset_board/.test(object.name)) {
       object.material = Array.isArray(object.material)
@@ -268,7 +338,13 @@ export function createFurnitureInstance(asset: GLTF) {
       materials.push(...(Array.isArray(object.material) ? object.material : [object.material]));
     }
   });
-  return { root, dispose: () => materials.forEach((material) => material.dispose()) };
+  return {
+    root,
+    dispose: () => {
+      disposeEnhanced();
+      materials.forEach((material) => material.dispose());
+    },
+  };
 }
 export function updateFurniture(
   root: Object3D,
@@ -321,11 +397,16 @@ export function createPerformanceInstance(
   asset: GLTF,
   character: GLTF,
   name: import("./officeMotion").Amenity,
+  actorKey = "default",
+  child = false,
 ) {
   const root = clone(character.scene),
     motion = clone(asset.scene),
     source = motion.children.find((object) => object.name.toLowerCase().includes("performer")),
     performer = root.children[0];
+  const theme = pickCrewTheme(actorKey);
+  const disposeSilhouette = applyActorThemeAndSilhouette(root, theme, child);
+  const materials = makeLifecycleMaterials(root, theme);
   if (performer && source) {
     performer.name = source.name;
     performer.position.copy(source.position);
@@ -337,7 +418,16 @@ export function createPerformanceInstance(
       object.visible = false;
   });
   const props = motion.children.slice();
-  for (const child of props) if (child !== source) root.add(child);
+  for (const prop of props)
+    if (prop !== source) {
+      prop.traverse((obj) => {
+        if (obj instanceof Mesh) {
+          obj.castShadow = true;
+          obj.receiveShadow = true;
+        }
+      });
+      root.add(prop);
+    }
   const mixer = new AnimationMixer(root),
     clip = new AnimationClip(
       name,
@@ -346,5 +436,13 @@ export function createPerformanceInstance(
     );
   mixer.clipAction(clip).play();
   mixer.setTime(0);
-  return { root, mixer, performer };
+  return {
+    root,
+    mixer,
+    performer,
+    dispose: () => {
+      materials.dispose();
+      disposeSilhouette();
+    },
+  };
 }

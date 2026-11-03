@@ -34,8 +34,9 @@ export function useOfficeWorld(
   loaded: boolean,
   motion: OfficeMotion,
   visible: boolean,
+  includeInactive = true,
 ) {
-  const storageKey = `t3:signal-office:layout:v1:${environmentId}`;
+  const storageKey = `t3:signal-office:layout:v1:${environmentId}${includeInactive ? "" : ":active"}`;
   const [saved] = useState(() => readAssignments(storageKey));
   const [timers] = useState(() => new Map<string, ReturnType<typeof setTimeout>>());
   const signature =

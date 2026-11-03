@@ -198,7 +198,7 @@ function ActorActions({
   };
   return (
     <div
-      className="pointer-events-auto mt-2 flex max-w-full flex-col gap-2 rounded-2xl bg-popover p-2 text-popover-foreground shadow-lg"
+      className="liquid-glass pointer-events-auto mt-2 flex max-w-full flex-col gap-2 rounded-2xl border p-2"
       role="group"
       aria-label={`${actor.title} actions`}
     >
@@ -339,16 +339,19 @@ function OfficeFloor({
   audio,
   visible,
   onRemote,
+  onShowCompletedChange,
 }: {
   environmentId: EnvironmentId;
   prefs: OfficePreferences;
   audio: OfficeAudio;
   visible: boolean;
   onRemote: (ref: ScopedThreadRef) => void;
+  onShowCompletedChange: (show: boolean) => void;
 }) {
   const chat = use(OfficeChatContext),
     data = useOfficeData(environmentId, true, visible && !chat.isOpen),
     projects = useProjects();
+  const actors = prefs.showCompleted ? data.actors : data.activeActors;
   const titles = new Map(
     projects
       .filter((project) => project.environmentId === environmentId)
@@ -358,12 +361,13 @@ function OfficeFloor({
     [labels] = useState(() => new Map<string, HTMLElement>());
   const world = useOfficeWorld(
     environmentId,
-    data.actors,
+    actors,
     titles,
     data.online,
     data.ready,
     motion,
     visible && !chat.isOpen,
+    prefs.showCompleted,
   );
   const [selected, setSelected] = useState<string | null>(null),
     [search, setSearch] = useState(""),
@@ -382,7 +386,7 @@ function OfficeFloor({
     reduced = systemReduced || prefs.reducedMotion;
   const directoryRef = useRef<HTMLInputElement>(null);
   const soundedTransitions = useRef(new Set<string>());
-  const actor = data.actors.find((actor) => actor.key === selected) ?? null;
+  const actor = actors.find((actor) => actor.key === selected) ?? null;
   const select = (key: string) => {
     setSelected(key);
     const life = motion.lives.get(key),
@@ -479,7 +483,7 @@ function OfficeFloor({
     },
     [labels, motion],
   );
-  const matches = data.actors.filter(
+  const matches = actors.filter(
     (actor) =>
       (!attentionOnly || actor.status === "waiting" || actor.status === "error") &&
       `${actor.title} ${titles.get(actor.projectId) ?? ""} ${OFFICE_STATUS_LABELS[actor.status]}`
@@ -487,7 +491,13 @@ function OfficeFloor({
         .includes(search.toLocaleLowerCase()),
   );
   const remoteChildren = data.children.filter(
-    (child) => child.remoteChild && child.closedAt == null,
+    (child) =>
+      child.remoteChild &&
+      child.closedAt == null &&
+      (prefs.showCompleted ||
+        child.status === "pending" ||
+        child.status === "running" ||
+        child.status === "waiting"),
   );
   const totalPages = Math.max(1, Math.ceil(Math.max(matches.length, remoteChildren.length) / 200)),
     page = Math.min(directoryPage, totalPages - 1);
@@ -550,9 +560,10 @@ function OfficeFloor({
                 hidden
               >
                 <Button
-                  variant="media-close"
+                  variant="liquid-glass"
                   size="xs"
                   className="max-w-52"
+                  aria-pressed={entry.key === selected}
                   onClick={() => setSelected(entry.key)}
                   aria-label={`${entry.title}, ${OFFICE_STATUS_LABELS[entry.status]}, ${titles.get(entry.projectId) ?? "Project"}`}
                 >
@@ -560,7 +571,7 @@ function OfficeFloor({
                   <span className="truncate">{entry.title}</span>
                 </Button>
                 {prefs.bubbles && (entry.key === selected || entry.status === "waiting") ? (
-                  <div className="max-w-64 rounded-md bg-background px-2 py-1 text-foreground shadow-sm">
+                  <div className="liquid-glass max-w-64 rounded-full border px-3 py-1">
                     {entry.key === selected &&
                     entry.status !== "offline" &&
                     visible &&
@@ -603,7 +614,7 @@ function OfficeFloor({
               >
                 <Button
                   size="xs"
-                  variant="media-close"
+                  variant="liquid-glass"
                   onClick={() =>
                     setFocus({
                       x: room.site.x,
@@ -614,15 +625,18 @@ function OfficeFloor({
                   }
                 >
                   <span className="truncate">{room.title}</span>
-                  <span className="text-2xs">
-                    {room.projectId === null
-                      ? "Rest terrace"
-                      : data.actors.filter(
+                  {room.projectId === null ? null : (
+                    <span className="text-2xs opacity-75">
+                      ·{" "}
+                      {
+                        actors.filter(
                           (actor) =>
                             projectRoomKey(actor.projectId, world.slots[actor.key] ?? 0) ===
                             room.id,
-                        ).length}
-                  </span>
+                        ).length
+                      }
+                    </span>
+                  )}
                 </Button>
               </div>
             ))}
@@ -695,7 +709,7 @@ function OfficeFloor({
           >
             {data.failed
               ? "Inventory could not be refreshed. Last known occupants are retained; thread actions are paused."
-              : data.actors.length === 0
+              : actors.length === 0
                 ? "Loading retained agents from this environment…"
                 : "Synchronizing retained inventory. Last known occupants stay visible until the current inventory is ready."}{" "}
             <Button size="sm" variant="outline" onClick={data.refresh}>
@@ -703,12 +717,15 @@ function OfficeFloor({
             </Button>
           </div>
         ) : null}
-        {data.online && data.ready && data.actors.length === 0 ? (
+        {data.online && data.ready && actors.length === 0 ? (
           <div className="absolute inset-x-4 top-1/3 mx-auto max-w-sm rounded-xl bg-background p-5 text-center">
-            <p className="font-medium">The office is ready</p>
+            <p className="font-medium">
+              {prefs.showCompleted ? "The office is ready" : "No agents are running"}
+            </p>
             <p className="mt-2 text-sm text-muted-foreground">
-              Start a thread in T3 to open its project room. Settled work stays available in the
-              normal thread list.
+              {prefs.showCompleted
+                ? "Start a thread in T3 to open its project room."
+                : "Project rooms appear when agents start working or need your input. Enable Show completed agents to see retained work."}
             </p>
           </div>
         ) : null}
@@ -735,7 +752,9 @@ function OfficeFloor({
           aria-label="Office directory"
         >
           <div className="flex items-center justify-between px-4 pb-2 pt-4">
-            <h2 className="text-sm font-medium">Agents · {data.actors.length}</h2>
+            <h2 className="text-sm font-medium">
+              {prefs.showCompleted ? "Agents" : "Active agents"} · {actors.length}
+            </h2>
             <Button
               size="icon-sm"
               variant="ghost"
@@ -756,6 +775,13 @@ function OfficeFloor({
                 setDirectoryPage(0);
               }}
             />
+            <label className="flex items-center gap-2 text-xs">
+              <Checkbox
+                checked={prefs.showCompleted}
+                onCheckedChange={(checked) => onShowCompletedChange(checked === true)}
+              />
+              Show completed agents
+            </label>
             <label className="flex items-center gap-2 text-xs">
               <Checkbox
                 checked={attentionOnly}
@@ -851,12 +877,11 @@ function OfficeFloor({
             </div>
           ) : null}
           <p className="border-t p-3 text-2xs text-muted-foreground">
-            Rooms keep their sites as the office grows. Crowded projects extend into rooms on the
-            same floor. Lobby rest terraces share the central amenities. Showing up to{" "}
-            {prefs.quality === "low" ? 8 : 16} agents and 24 rooms or terraces at a time; the
-            directory lists all {data.actors.length} occupants. Select anyone to focus their
-            location. Completed children remain on their project floor; closure history can be
-            unavailable on some providers.
+            {prefs.showCompleted
+              ? "Includes completed, interrupted, and failed work retained in this environment."
+              : "Rooms show projects with agents working or awaiting input."}{" "}
+            The directory lists all {actors.length} {prefs.showCompleted ? "retained" : "active"}{" "}
+            agents. Completed work stays available when hidden.
           </p>
         </aside>
       ) : null}
@@ -930,7 +955,7 @@ export function OfficePage() {
       <header
         className={cn(
           "flex shrink-0 items-center gap-2 border-b px-3 py-2",
-          isElectron && "drag-region",
+          isElectron && !chat.isOpen && "drag-region",
         )}
       >
         <Button ref={backControl} size="sm" variant="ghost" onClick={() => void close()}>
@@ -983,11 +1008,12 @@ export function OfficePage() {
       </header>
       {selected?.serverConfig?.officeInventory === true ? (
         <OfficeFloor
-          key={selected.environmentId}
+          key={`${selected.environmentId}:${prefs.showCompleted ? "all" : "active"}`}
           environmentId={selected.environmentId}
           prefs={prefs}
           audio={audio}
           visible={visible}
+          onShowCompletedChange={(showCompleted) => setPrefs({ ...prefs, showCompleted })}
           onRemote={(ref) => {
             setChosen(ref.environmentId);
             chat.open(ref);

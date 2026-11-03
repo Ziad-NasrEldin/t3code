@@ -75,9 +75,9 @@ function ChatRouteLayout() {
         first?.focus();
       }
     };
-    root.addEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey);
     return () => {
-      root.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey);
       if (previous instanceof HTMLElement && previous.isConnected) previous.focus();
     };
   }, [officeChatOpen]);
@@ -85,6 +85,13 @@ function ChatRouteLayout() {
     <OfficeChatContext
       value={{ open: setOfficeTarget, close: () => setOfficeTarget(null), isOpen: officeChatOpen }}
     >
+      {officeChatOpen ? (
+        <div
+          aria-hidden="true"
+          className="fixed inset-0 z-40"
+          onPointerDown={() => setOfficeTarget(null)}
+        />
+      ) : null}
       <div
         ref={chatHost}
         style={officeChatOpen ? { top: Math.max(32, nativeTitlebarHeight + 8) } : undefined}
@@ -98,7 +105,7 @@ function ChatRouteLayout() {
         }
       >
         {officeChatOpen ? (
-          <div className="flex shrink-0 items-center justify-between border-b px-4 py-2">
+          <div className="relative z-30 flex shrink-0 items-center justify-between border-b bg-background px-4 py-2 [-webkit-app-region:no-drag]">
             <span className="text-sm font-medium">Chat · user messages and final responses</span>
             <Button
               size="icon"

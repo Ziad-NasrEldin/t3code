@@ -39,6 +39,40 @@ const child: OrchestrationV2OfficeChild = {
   result: "Delivered",
 };
 describe("office retained membership", () => {
+  it("shows only live work in the active view while retaining completed agents for the full view", () => {
+    for (const online of [true, false]) {
+      for (const status of ["preparing", "queued", "starting", "running", "waiting"] as const) {
+        const running = { ...parent, status };
+        const all = deriveOfficeActors(environmentId, [running, native], [child], online);
+        const active = deriveOfficeActors(environmentId, [running, native], [child], online, false);
+        expect(all).toHaveLength(2);
+        expect(active.map((actor) => actor.threadRef.threadId)).toEqual([parent.id]);
+        expect(active[0]?.status).toBe(online ? officeThreadStatus(running) : "offline");
+      }
+      for (const status of ["completed", "interrupted", "cancelled", "failed"] as const) {
+        const stopped = { ...parent, status };
+        expect(
+          deriveOfficeActors(environmentId, [stopped, native], [child], online, false),
+        ).toEqual([]);
+      }
+      expect(deriveOfficeActors(environmentId, [parent], [], online, false)).toEqual([]);
+      for (const status of ["pending", "running", "waiting"] as const) {
+        const activeChild = deriveOfficeActors(
+          environmentId,
+          [parent, native],
+          [{ ...child, status }],
+          online,
+          false,
+        );
+        expect(activeChild.map((actor) => actor.threadRef.threadId)).toEqual([childId]);
+      }
+      const needsInput = { ...parent, hasActionableProposedPlan: true };
+      expect(deriveOfficeActors(environmentId, [needsInput], [], online, false)).toHaveLength(1);
+    }
+    // The history toggle is a view filter; it never changes the retained membership or closure.
+    expect(deriveOfficeActors(environmentId, [parent, native], [child], true)).toHaveLength(2);
+    expect(child.closedAt).toBeUndefined();
+  });
   it("retains completed native children across later parent turns, remounts and automatic settlement", () => {
     for (const threads of [
       [parent, native],

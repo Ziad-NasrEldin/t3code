@@ -64,11 +64,21 @@ export function officeThreadStatus(thread: OrchestrationV2ThreadShell): OfficeSt
 export function officeExcerpt(text: string | null | undefined, fallback: string): string {
   return text?.replace(/\s+/g, " ").trim().slice(0, 180) || fallback;
 }
+function isActiveOfficeStatus(status: OfficeStatus): boolean {
+  return (
+    status === "starting" ||
+    status === "working" ||
+    status === "thinking" ||
+    status === "streaming" ||
+    status === "waiting"
+  );
+}
 export function deriveOfficeActors(
   environmentId: EnvironmentId,
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   children: ReadonlyArray<OrchestrationV2OfficeChild>,
   online: boolean,
+  includeInactive = true,
 ): ReadonlyArray<OfficeActor> {
   const byId = new Map(threads.map((thread) => [thread.id, thread]));
   const actors = new Map<string, OfficeActor>();
@@ -87,6 +97,7 @@ export function deriveOfficeActors(
       continue;
     const ref = scopeThreadRef(environmentId, thread.id);
     const state = officeThreadStatus(thread);
+    if (!includeInactive && !isActiveOfficeStatus(state)) continue;
     const status = !online ? "offline" : child && state === "idle" ? "sleeping" : state;
     const chatRef = native ? scopeThreadRef(environmentId, thread.lineage.rootThreadId) : ref;
     actors.set(scopedThreadKey(ref), {
@@ -140,24 +151,24 @@ export function deriveOfficeActors(
       ? scopedThreadKey(ref)
       : `${scopedThreadKey(ref)}:child:${child.id}`;
     const native = child.origin === "provider_native";
-    const status: OfficeStatus = !online
-      ? "offline"
-      : activeThread
-        ? threadState!
-        : child.status === "completed" ||
-            (child.status === "idle" && (child.completedAt != null || child.result != null))
-          ? "sleeping"
-          : child.status === "idle"
-            ? "ready"
-            : child.status === "failed"
-              ? "error"
-              : child.status === "cancelled" || child.status === "interrupted"
-                ? "interrupted"
-                : child.status === "waiting"
-                  ? "working"
-                  : child.status === "pending"
-                    ? "starting"
-                    : "working";
+    const activity: OfficeStatus = activeThread
+      ? threadState!
+      : child.status === "completed" ||
+          (child.status === "idle" && (child.completedAt != null || child.result != null))
+        ? "sleeping"
+        : child.status === "idle"
+          ? "ready"
+          : child.status === "failed"
+            ? "error"
+            : child.status === "cancelled" || child.status === "interrupted"
+              ? "interrupted"
+              : child.status === "waiting"
+                ? "working"
+                : child.status === "pending"
+                  ? "starting"
+                  : "working";
+    if (!includeInactive && !isActiveOfficeStatus(activity)) continue;
+    const status = online ? activity : "offline";
     const chatRef =
       native || !thread ? scopeThreadRef(environmentId, owner.lineage.rootThreadId) : ref;
     actors.set(key, {

@@ -371,6 +371,59 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 }
 
+@utility liquid-glass {
+  --control-icon-color: rgb(13 107 125);
+  color: rgb(18 36 42);
+  border-color: rgb(255 255 255 / 76%);
+  background:
+    linear-gradient(
+      145deg,
+      rgb(255 255 255 / 72%) 0%,
+      rgb(255 255 255 / 20%) 48%,
+      rgb(225 246 255 / 46%) 100%
+    ),
+    rgb(255 255 255 / 24%);
+  -webkit-backdrop-filter: blur(12px) saturate(1.8) brightness(1.05);
+  backdrop-filter: blur(12px) saturate(1.8) brightness(1.05);
+  text-shadow: 0 1px 1px rgb(255 255 255 / 80%);
+  box-shadow:
+    0 8px 20px -4px rgb(15 32 39 / 22%),
+    0 2px 5px rgb(15 32 39 / 10%),
+    inset 0 1.5px 2px rgb(255 255 255 / 96%),
+    inset 0 -1.5px 2px rgb(255 255 255 / 55%),
+    inset 0 0 8px rgb(255 255 255 / 30%);
+
+  &:hover,
+  &[data-pressed] {
+    border-color: rgb(255 255 255 / 95%);
+    background:
+      linear-gradient(
+        145deg,
+        rgb(255 255 255 / 84%) 0%,
+        rgb(255 255 255 / 32%) 48%,
+        rgb(232 249 255 / 58%) 100%
+      ),
+      rgb(255 255 255 / 34%);
+  }
+
+  &[aria-pressed="true"] {
+    border-color: rgb(255 255 255 / 98%);
+    background:
+      linear-gradient(
+        145deg,
+        rgb(245 253 255 / 88%) 0%,
+        rgb(215 244 255 / 42%) 50%,
+        rgb(236 250 255 / 65%) 100%
+      ),
+      rgb(255 255 255 / 38%);
+    box-shadow:
+      0 0 0 2px rgb(56 189 248 / 65%),
+      0 8px 20px -4px rgb(15 32 39 / 24%),
+      inset 0 1.5px 2px rgb(255 255 255 / 98%),
+      inset 0 -1.5px 2px rgb(255 255 255 / 65%);
+  }
+}
+
 @utility alert-glass {
   --alert-glass-tint: transparent;
   background:

@@ -120,6 +120,33 @@ export const UsageSummaryInput = Schema.Struct({
 });
 export type UsageSummaryInput = typeof UsageSummaryInput.Type;
 
+export const TokenEconomizerCohort = Schema.Struct({
+  model: TrimmedNonEmptyString,
+  beforeSessions: NonNegativeInt,
+  afterSessions: NonNegativeInt,
+  beforeInputTokens: Schema.Number,
+  afterInputTokens: Schema.Number,
+});
+export type TokenEconomizerCohort = typeof TokenEconomizerCohort.Type;
+
+export const TokenEconomizerUsage = Schema.Struct({
+  installationId: TrimmedNonEmptyString,
+  cutover: Schema.String,
+  readAt: Schema.String,
+  overheadTokens: Schema.Number,
+  excludedSessions: NonNegativeInt,
+  repositories: Schema.Array(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      enabled: Schema.Boolean,
+      foldedSessions: NonNegativeInt,
+      cohorts: Schema.Array(TokenEconomizerCohort),
+    }),
+  ),
+  warnings: Schema.Array(Schema.String),
+});
+export type TokenEconomizerUsage = typeof TokenEconomizerUsage.Type;
+
 export const UsageSummary = Schema.Struct({
   contractVersion: Schema.Number,
   readAt: Schema.String,
@@ -130,6 +157,7 @@ export const UsageSummary = Schema.Struct({
   sources: ForwardCompatibleArray(UsageSource),
   pricing: UsagePricing,
   scanDurationMs: NonNegativeInt,
+  tokenEconomizer: Schema.optionalKey(TokenEconomizerUsage),
 });
 export type UsageSummary = typeof UsageSummary.Type;
 

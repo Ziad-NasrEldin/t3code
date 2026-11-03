@@ -56,6 +56,7 @@ import {
   type CachedFile,
   type ScanCache,
 } from "./usageScanCache.ts";
+import { readTokenEconomizerUsage } from "./tokenEconomizerUsage.ts";
 
 const LITELLM_RATES_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
@@ -871,6 +872,10 @@ export const make = Effect.gen(function* () {
     const aggregated = aggregator.finish();
     const readAt = yield* DateTime.now;
     const finishedAtMs = yield* Clock.currentTimeMillis;
+    const tokenEconomizer = yield* readTokenEconomizerUsage().pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
 
     return {
       contractVersion: USAGE_CONTRACT_VERSION,
@@ -882,6 +887,7 @@ export const make = Effect.gen(function* () {
       sources,
       pricing: pricing(),
       scanDurationMs: Math.max(0, finishedAtMs - startedAtMs),
+      ...(tokenEconomizer === undefined ? {} : { tokenEconomizer }),
     } satisfies UsageSummary;
   });
 

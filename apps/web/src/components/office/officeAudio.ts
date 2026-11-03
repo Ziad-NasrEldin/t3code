@@ -4,6 +4,7 @@ export interface OfficePreferences {
   effects: number;
   reducedMotion: boolean;
   bubbles: boolean;
+  showCompleted: boolean;
   quality: "low" | "standard";
 }
 const DEFAULT_OFFICE_PREFERENCES: OfficePreferences = {
@@ -12,6 +13,7 @@ const DEFAULT_OFFICE_PREFERENCES: OfficePreferences = {
   effects: 0.15,
   reducedMotion: false,
   bubbles: true,
+  showCompleted: false,
   quality: "standard",
 };
 export function readOfficePreferences(): OfficePreferences {
@@ -27,6 +29,7 @@ export function readOfficePreferences(): OfficePreferences {
       effects: typeof p.effects === "number" ? Math.max(0, Math.min(1, p.effects)) : 0.15,
       reducedMotion: p.reducedMotion === true,
       bubbles: p.bubbles !== false,
+      showCompleted: p.showCompleted === true,
       quality: p.quality === "low" ? "low" : "standard",
     };
   } catch {
