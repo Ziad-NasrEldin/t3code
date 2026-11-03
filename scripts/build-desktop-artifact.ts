@@ -62,7 +62,8 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const SIGNAL_CREW = process.env.T3CODE_DESKTOP_EDITION === "signal-crew";
+const DESKTOP_APP_ID = SIGNAL_CREW ? "com.t3tools.t3code.signalcrew" : "com.t3tools.t3code";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2753,6 +2754,7 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
+  if (SIGNAL_CREW) return "T3 Code (Signal Crew)";
   return resolveDesktopBrandChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
@@ -2778,7 +2780,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: SIGNAL_CREW
+      ? "Signal-Crew-${version}-${arch}.${ext}"
+      : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -3870,7 +3874,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     license: "MIT",
     homepage: "https://t3.codes",
     author: "T3 Tools",
-    main: "apps/desktop/dist-electron/boot.cjs",
+    main: SIGNAL_CREW ? "signal-crew-bootstrap.cjs" : "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
@@ -3893,6 +3897,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     },
   };
 
+  if (SIGNAL_CREW) {
+    yield* fs.copyFile(
+      path.join(repoRoot, "scripts/signal-crew-bootstrap.cjs"),
+      path.join(stageAppDir, "signal-crew-bootstrap.cjs"),
+    );
+  }
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
   const stageWorkspaceConfig = createStageWorkspaceConfig({

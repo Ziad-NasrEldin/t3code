@@ -33,6 +33,7 @@
         "setup-worktree.ts",
         "sign-macos.ts",
         "prepare-server-compile-cache.cjs",
+        "signal-crew-bootstrap.cjs",
         "smoke-desktop-app.ts",
         "verify-windows-desktop-artifact.ts",
       ],

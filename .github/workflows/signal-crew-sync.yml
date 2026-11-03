@@ -1,0 +1,42 @@
+name: Signal Crew upstream check
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: signal-crew-sync
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'Ziad-NasrEldin/t3code'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/signal-crew-office
+          fetch-depth: 0
+      - name: Prepare an upstream merge for review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=$(gh api repos/pingdotgg/t3code/releases/latest --jq .tag_name)
+          git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$tag"
+          upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+          if git merge-base --is-ancestor "$upstream" HEAD; then exit 0; fi
+          branch="signal-crew/upstream-$upstream"
+          if git ls-remote --exit-code --heads origin "$branch"; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
+          if ! git merge --no-edit "$upstream"; then
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            echo 'Upstream merge requires manual repair.' >&2
+            exit 1
+          fi
+          git push origin "HEAD:refs/heads/$branch"
+          echo "Prepared $branch from official release $tag. Review and test before merging." >> "$GITHUB_STEP_SUMMARY"
