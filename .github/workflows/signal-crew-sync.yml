@@ -1,4 +1,4 @@
-name: Signal Crew upstream check
+name: Signal Crew nightly upstream check
 on:
   schedule:
     - cron: "17 */6 * * *"
@@ -17,15 +17,31 @@ jobs:
         with:
           ref: feat/signal-crew-office
           fetch-depth: 0
+      - name: Resolve latest official nightly
+        id: nightly
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { resolveLatestNightlyCommit } = require('./.github/scripts/check-nightly-release.cjs');
+            const { tag, sha } = await resolveLatestNightlyCommit({
+              github,
+              context: { repo: { owner: 'pingdotgg', repo: 't3code' } },
+              core,
+            });
+            core.setOutput('tag', tag);
+            core.setOutput('sha', sha);
       - name: Prepare an upstream merge for review
         env:
           GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.nightly.outputs.tag }}
+          UPSTREAM_SHA: ${{ steps.nightly.outputs.sha }}
         shell: bash
         run: |
           set -euo pipefail
-          tag=$(gh api repos/pingdotgg/t3code/releases/latest --jq .tag_name)
+          tag="$UPSTREAM_TAG"
           git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$tag"
           upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+          test "$upstream" = "$UPSTREAM_SHA"
           if git merge-base --is-ancestor "$upstream" HEAD; then exit 0; fi
           branch="signal-crew/upstream-$upstream"
           if git ls-remote --exit-code --heads origin "$branch"; then exit 0; fi
@@ -39,4 +55,4 @@ jobs:
             exit 1
           fi
           git push origin "HEAD:refs/heads/$branch"
-          echo "Prepared $branch from official release $tag. Review and test before merging." >> "$GITHUB_STEP_SUMMARY"
+          echo "Prepared $branch from official nightly $tag. Review and test before merging." >> "$GITHUB_STEP_SUMMARY"
