@@ -10,3 +10,7 @@ Configure repository secrets `CSC_LINK` (base64 Developer ID Application certifi
 Signal Crew packaging uses `T3CODE_DESKTOP_EDITION=signal-crew` and `T3CODE_DESKTOP_UPDATE_REPOSITORY=Ziad-NasrEldin/t3code`. It retains the installed edition's `t3code-signal-crew/home` and `t3code-signal-crew/electron` paths. Install the first signed release manually to bootstrap the update feed. Subsequent published releases are delivered by the existing desktop updater. Do not replace the running app during active work.
 
 A workflow file in a local checkout is not an activated service. Repository credentials, workflow deployment, a signed initial installer, and an observed update between two versions are required before claiming automatic updates work. Back up application data before the upgrade test; database migrations may prevent simply reinstalling an older version.
+
+## Build on the maintainer Mac
+
+The local route keeps the Developer ID private key on the Mac. Store notarization credentials once with `xcrun notarytool store-credentials signal-crew`, then run `bash scripts/release-signal-crew-local.sh VERSION` from a clean release checkout. The script tests, signs with the existing certificate, notarizes using the Keychain profile, and uploads a draft release. No Apple credentials are sent to GitHub. Signal Crew can build without a provisioning profile; in that case the optional in-app browser passkey entitlements are omitted, matching the original custom installation. Official builds continue to require their profile.
