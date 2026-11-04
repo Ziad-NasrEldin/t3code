@@ -2684,12 +2684,15 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   updateChannel: "latest" | "nightly",
 ) {
   const env = yield* Config.all({
+    edition: Config.String("T3CODE_DESKTOP_EDITION").pipe(Config.option),
     updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
   });
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
+    (Option.getOrUndefined(env.edition) === "signal-crew"
+      ? "Ziad-NasrEldin/t3code"
+      : Option.getOrUndefined(env.githubRepository)?.trim()) ||
     ""
   ).trim();
   if (!rawRepo) return undefined;

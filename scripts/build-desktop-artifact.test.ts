@@ -548,6 +548,63 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           releaseType: "release",
         },
       ]);
+      const signalCrew = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.8",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_EDITION: "signal-crew",
+                GITHUB_REPOSITORY: "pingdotgg/t3code",
+              },
+            }),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(signalCrew.publish, [
+        {
+          provider: "github",
+          owner: "Ziad-NasrEldin",
+          repo: "t3code",
+          releaseType: "release",
+        },
+      ]);
+      const signalCrewNightly = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.9-nightly.20261104.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_EDITION: "signal-crew",
+                GITHUB_REPOSITORY: "pingdotgg/t3code",
+              },
+            }),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(signalCrewNightly.publish, [
+        {
+          provider: "github",
+          owner: "Ziad-NasrEldin",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
+        },
+      ]);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(

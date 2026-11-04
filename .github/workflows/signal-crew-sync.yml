@@ -5,6 +5,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
+  pull-requests: write
 concurrency:
   group: signal-crew-sync
   cancel-in-progress: false
@@ -30,7 +31,7 @@ jobs:
             });
             core.setOutput('tag', tag);
             core.setOutput('sha', sha);
-      - name: Prepare an upstream merge for review
+      - name: Open an approval-gated upstream merge
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_TAG: ${{ steps.nightly.outputs.tag }}
@@ -39,6 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$UPSTREAM_TAG"
+          base_branch="feat/signal-crew-office"
           git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$tag"
           upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
           test "$upstream" = "$UPSTREAM_SHA"
@@ -47,12 +49,36 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch"; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -b "$branch"
-          if ! git merge --no-edit "$upstream"; then
-            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
-            git merge --abort
-            echo 'Upstream merge requires manual repair.' >&2
-            exit 1
-          fi
+          # Keep the branch at the official nightly. The merge agent performs
+          # the actual merge of the maintained branch and resolves conflicts
+          # on this branch, so GitHub can show one reviewable PR throughout.
+          git checkout -b "$branch" "$upstream"
           git push origin "HEAD:refs/heads/$branch"
-          echo "Prepared $branch from official nightly $tag. Review and test before merging." >> "$GITHUB_STEP_SUMMARY"
+          cat > "$RUNNER_TEMP/pr-body.md" <<EOF
+          ## Approval required before merge
+
+          This branch imports the official T3 Code nightly **$tag** at **$upstream**.
+
+          Signal Crew must not install the upstream artifact directly: doing that would replace the custom Office build. Before merging this PR, ask the user to confirm that an agent should:
+
+          1. merge the Signal Crew maintained branch ($base_branch) into this branch;
+          2. resolve conflicts while preserving the Signal Crew customizations;
+          3. run the focused updater, packaging, and Office checks;
+          4. attach the test results and ask for final merge approval.
+
+          Only the resulting signed Signal Crew build may be published to the desktop update feed.
+          EOF
+          pr_url=$(gh pr create \
+            --draft \
+            --base "$base_branch" \
+            --head "$branch" \
+            --title "chore(signal-crew): import official nightly $tag" \
+            --body-file "$RUNNER_TEMP/pr-body.md")
+          {
+            echo "### Official nightly ready for approval"
+            echo
+            echo "Source: [pingdotgg/t3code $tag](https://github.com/pingdotgg/t3code/releases/tag/$tag)"
+            echo "Merge PR: $pr_url"
+            echo
+            echo "An agent must merge and resolve conflicts only after the user confirms."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -2,9 +2,21 @@ name: Signal Crew release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Monotonically increasing stable semver (for example 0.1.8)"
+      channel:
+        description: "Signal Crew release channel"
         required: true
+        default: nightly
+        type: choice
+        options:
+          - nightly
+          - stable
+      version:
+        description: "Full release version (for example 0.1.9-nightly.20261104.1 or 0.1.9)"
+        required: true
+        type: string
+      upstream_tag:
+        description: "Official T3 Code nightly tag merged into this build (required for nightly)"
+        required: false
         type: string
 permissions:
   contents: write
@@ -19,7 +31,9 @@ jobs:
     env:
       T3CODE_DESKTOP_EDITION: signal-crew
       T3CODE_DESKTOP_UPDATE_REPOSITORY: Ziad-NasrEldin/t3code
+      CHANNEL: ${{ inputs.channel }}
       VERSION: ${{ inputs.version }}
+      UPSTREAM_TAG: ${{ inputs.upstream_tag }}
     steps:
       - uses: actions/checkout@v4
       - name: Validate release and signing configuration
@@ -32,7 +46,20 @@ jobs:
           PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
           TEAM: ${{ vars.APPLE_TEAM_ID }}
         run: |
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          if [[ "$CHANNEL" == nightly ]]; then
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]] || { echo 'Nightly versions must match x.y.z-nightly.YYYYMMDD.N' >&2; exit 1; }
+            test -n "$UPSTREAM_TAG" || { echo 'Nightly releases require the merged official nightly tag.' >&2; exit 1; }
+          else
+            [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Stable versions must match x.y.z' >&2; exit 1; }
+          fi
+          if [[ "$CHANNEL" == nightly ]]; then
+            git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$UPSTREAM_TAG"
+            upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+            git merge-base --is-ancestor "$upstream" "$GITHUB_SHA" || {
+              echo "The maintained branch does not contain official nightly $UPSTREAM_TAG ($upstream). Merge it before releasing." >&2
+              exit 1
+            }
+          fi
           for key in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER PROFILE TEAM; do
             test -n "${!key}" || { echo "Missing $key" >&2; exit 1; }
           done
@@ -67,5 +94,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test -f release/latest-mac.yml
-          gh release create "v$VERSION" release/*.dmg release/*.zip release/*.yml --draft --target "$GITHUB_SHA" --title "Signal Crew $VERSION" --notes 'Signal Crew for Apple Silicon. Validate this installer and upgrade before publishing.'
+          if [[ "$CHANNEL" == nightly ]]; then
+            test -f release/nightly-mac.yml
+          else
+            test -f release/latest-mac.yml
+          fi
+          release_args=("v$VERSION" release/*.dmg release/*.zip release/*.yml --draft --target "$GITHUB_SHA")
+          if [[ "$CHANNEL" == nightly ]]; then
+            release_args+=(--prerelease)
+            title="Signal Crew nightly $VERSION"
+            notes="Signal Crew nightly built from official T3 Code nightly $UPSTREAM_TAG after the approved merge. Validate this installer and upgrade before publishing."
+          else
+            title="Signal Crew $VERSION"
+            notes='Signal Crew for Apple Silicon. Validate this installer and upgrade before publishing.'
+          fi
+          gh release create "${release_args[@]}" --title "$title" --notes "$notes"
