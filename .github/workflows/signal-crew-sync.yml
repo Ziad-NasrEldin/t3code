@@ -33,7 +33,8 @@ jobs:
             core.setOutput('sha', sha);
       - name: Open an approval-gated upstream merge
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.SIGNAL_CREW_SYNC_TOKEN || github.token }}
+          SIGNAL_CREW_SYNC_TOKEN: ${{ secrets.SIGNAL_CREW_SYNC_TOKEN }}
           UPSTREAM_TAG: ${{ steps.nightly.outputs.tag }}
           UPSTREAM_SHA: ${{ steps.nightly.outputs.sha }}
         shell: bash
@@ -49,6 +50,11 @@ jobs:
           if git ls-remote --exit-code --heads origin "$branch"; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [[ -z "$SIGNAL_CREW_SYNC_TOKEN" ]]; then
+            echo 'Set the SIGNAL_CREW_SYNC_TOKEN repository secret with Contents, Pull requests, and Workflows write access before importing an upstream nightly.' >&2
+            exit 1
+          fi
+          git remote set-url origin "https://x-access-token:$SIGNAL_CREW_SYNC_TOKEN@github.com/$GITHUB_REPOSITORY.git"
           # Keep the branch at the official nightly. The merge agent performs
           # the actual merge of the maintained branch and resolves conflicts
           # on this branch, so GitHub can show one reviewable PR throughout.
