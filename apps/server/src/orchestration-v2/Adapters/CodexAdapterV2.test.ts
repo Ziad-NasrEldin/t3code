@@ -3930,6 +3930,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
       const messages = assistantMessages(harness.events);
       assert.strictEqual(messages.at(-1)?.message.text, expected);
+      assert.strictEqual(messages.at(-1)?.message.responseKind, "final");
       assert.strictEqual(messages.at(-1)?.message.streaming, false);
       assert.strictEqual(new Set(messages.map(({ message }) => message.id)).size, 1);
       // Image bytes stay with Codex; clients load the saved file.
@@ -4079,7 +4080,9 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     Effect.scoped(
       Effect.gen(function* () {
         const transcript = finalAnswerTranscript("codex-redundant-empty-final", [
+          { id: "progress", text: "Checking the files.", phase: "commentary" },
           { id: "answer-non-empty", text: "CODEX_RECOVERY_OK" },
+          { id: "answer-part-two", text: "Second final part." },
           { id: "answer-empty", text: "" },
         ]);
         const harness = yield* makeCodexReplayHarness(transcript);
@@ -4098,7 +4101,22 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
         assert.deepEqual(
           assistantMessages(harness.events).map((event) => event.message.text),
-          ["CODEX_RECOVERY_OK"],
+          ["Checking the files.", "CODEX_RECOVERY_OK", "Second final part."],
+        );
+        assert.deepEqual(
+          assistantMessages(harness.events).map((event) => event.message.responseKind),
+          ["commentary", "final", "final"],
+        );
+        const items = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" &&
+          event.turnItem.type === "assistant_message" &&
+          !event.turnItem.streaming
+            ? [event.turnItem]
+            : [],
+        );
+        assert.deepEqual(
+          items.map((item) => item.responseKind),
+          ["commentary", "final", "final"],
         );
       }).pipe(
         Effect.provide(
@@ -7746,6 +7764,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
 
   it.effect.each([
     ["shutdown", "cancelled"],
+    ["explicit-close", "cancelled"],
+    ["close-after-completed", "completed"],
     ["activity-completed", "completed"],
     ["late-activity-completed", "completed"],
     ["stale-running", "completed"],
@@ -7771,7 +7791,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 item: {
                   type: "collabAgentToolCall",
                   id,
-                  tool: "listAgents",
+                  tool:
+                    nativeStatus === "explicit-close" || nativeStatus === "close-after-completed"
+                      ? "closeAgent"
+                      : "listAgents",
                   status: "completed",
                   senderThreadId: RESUME_NATIVE_THREAD,
                   receiverThreadIds: [RESUME_CHILD_THREAD],
@@ -7817,6 +7840,11 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 },
               },
             });
+          } else if (nativeStatus === "close-after-completed") {
+            entries.push(
+              stateEntry("completed", "child-completed"),
+              stateEntry("shutdown", "explicit-close"),
+            );
           } else if (nativeStatus === "stale-running" || nativeStatus === "duplicate-completed") {
             entries.push(stateEntry("completed", "child-completed"), {
               ...stateEntry(
@@ -7826,7 +7854,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               afterMs: 100,
             });
           } else {
-            entries.push(stateEntry(nativeStatus, "status-update"));
+            entries.push(
+              stateEntry(
+                nativeStatus === "explicit-close" ? "shutdown" : nativeStatus,
+                "status-update",
+              ),
+            );
           }
           if (nativeStatus === "late-activity-completed") {
             entries.push({
@@ -7888,6 +7921,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           yield* Deferred.await(marker);
           const latest = harness.subagentUpdates().at(-1)!.subagent;
           assert.equal(latest.status, expectedStatus);
+          assert.equal(
+            latest.closedAt != null,
+            nativeStatus === "explicit-close" || nativeStatus === "close-after-completed",
+          );
           if (nativeStatus === "duplicate-completed") {
             const first = harness.subagentUpdates().find((e) => e.subagent.status === "completed")!;
             assert.equal(

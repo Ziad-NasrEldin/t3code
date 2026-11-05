@@ -1,0 +1,126 @@
+diff --git a/dist/events-0dab3c53.cjs.dev.js b/dist/events-0dab3c53.cjs.dev.js
+index 705fbd514d4207a07fb3c6c28e631903746d5789..e773840b719a61be3e73dc7a86611582ec6cd8ac 100644
+--- a/dist/events-0dab3c53.cjs.dev.js
++++ b/dist/events-0dab3c53.cjs.dev.js
+@@ -17538,8 +17538,6 @@ function flushGlobalEffects(type, timestamp) {
+       return run(globalTailEffects, timestamp);
+   }
+ }
+-let subscribers;
+-let subscription;
+ function update(timestamp, state, frame) {
+   // Run local effects
+   let delta = state.clock.getDelta();
+@@ -17552,9 +17550,9 @@ function update(timestamp, state, frame) {
+   }
+ 
+   // Call subscribers (useFrame)
+-  subscribers = state.internal.subscribers;
++  const subscribers = state.internal.subscribers;
+   for (let i = 0; i < subscribers.length; i++) {
+-    subscription = subscribers[i];
++    const subscription = subscribers[i];
+     subscription.ref.current(subscription.store.getState(), delta, frame);
+   }
+ 
+@@ -17569,7 +17567,6 @@ let running = false;
+ let useFrameInProgress = false;
+ let repeat;
+ let frame;
+-let state;
+ function loop(timestamp) {
+   frame = requestAnimationFrame(loop);
+   running = true;
+@@ -17582,7 +17579,7 @@ function loop(timestamp) {
+   useFrameInProgress = true;
+   for (const root of _roots.values()) {
+     var _state$gl$xr;
+-    state = root.store.getState();
++    const state = root.store.getState();
+ 
+     // If the frameloop is invalidated, do not run another frame
+     if (state.internal.active && (state.frameloop === 'always' || state.internal.frames > 0) && !((_state$gl$xr = state.gl.xr) != null && _state$gl$xr.isPresenting)) {
+diff --git a/dist/events-98e95d43.cjs.prod.js b/dist/events-98e95d43.cjs.prod.js
+index c265e9e358f1fd6d7155216b013471ab445b9ce4..c0126969e6f1167a67c186574b0f4e91ab210636 100644
+--- a/dist/events-98e95d43.cjs.prod.js
++++ b/dist/events-98e95d43.cjs.prod.js
+@@ -8759,8 +8759,6 @@ function flushGlobalEffects(type, timestamp) {
+       return run(globalTailEffects, timestamp);
+   }
+ }
+-let subscribers;
+-let subscription;
+ function update(timestamp, state, frame) {
+   // Run local effects
+   let delta = state.clock.getDelta();
+@@ -8773,9 +8771,9 @@ function update(timestamp, state, frame) {
+   }
+ 
+   // Call subscribers (useFrame)
+-  subscribers = state.internal.subscribers;
++  const subscribers = state.internal.subscribers;
+   for (let i = 0; i < subscribers.length; i++) {
+-    subscription = subscribers[i];
++    const subscription = subscribers[i];
+     subscription.ref.current(subscription.store.getState(), delta, frame);
+   }
+ 
+@@ -8790,7 +8788,6 @@ let running = false;
+ let useFrameInProgress = false;
+ let repeat;
+ let frame;
+-let state;
+ function loop(timestamp) {
+   frame = requestAnimationFrame(loop);
+   running = true;
+@@ -8803,7 +8800,7 @@ function loop(timestamp) {
+   useFrameInProgress = true;
+   for (const root of _roots.values()) {
+     var _state$gl$xr;
+-    state = root.store.getState();
++    const state = root.store.getState();
+ 
+     // If the frameloop is invalidated, do not run another frame
+     if (state.internal.active && (state.frameloop === 'always' || state.internal.frames > 0) && !((_state$gl$xr = state.gl.xr) != null && _state$gl$xr.isPresenting)) {
+diff --git a/dist/events-e51d7528.esm.js b/dist/events-e51d7528.esm.js
+index 6c801a280936890feb78c502a0bf47cd2b478e15..c85b448ad09b486fdc29ac55334844c2d0775cc6 100644
+--- a/dist/events-e51d7528.esm.js
++++ b/dist/events-e51d7528.esm.js
+@@ -17513,8 +17513,6 @@ function flushGlobalEffects(type, timestamp) {
+       return run(globalTailEffects, timestamp);
+   }
+ }
+-let subscribers;
+-let subscription;
+ function update(timestamp, state, frame) {
+   // Run local effects
+   let delta = state.clock.getDelta();
+@@ -17527,9 +17525,9 @@ function update(timestamp, state, frame) {
+   }
+ 
+   // Call subscribers (useFrame)
+-  subscribers = state.internal.subscribers;
++  const subscribers = state.internal.subscribers;
+   for (let i = 0; i < subscribers.length; i++) {
+-    subscription = subscribers[i];
++    const subscription = subscribers[i];
+     subscription.ref.current(subscription.store.getState(), delta, frame);
+   }
+ 
+@@ -17544,7 +17542,6 @@ let running = false;
+ let useFrameInProgress = false;
+ let repeat;
+ let frame;
+-let state;
+ function loop(timestamp) {
+   frame = requestAnimationFrame(loop);
+   running = true;
+@@ -17557,7 +17554,7 @@ function loop(timestamp) {
+   useFrameInProgress = true;
+   for (const root of _roots.values()) {
+     var _state$gl$xr;
+-    state = root.store.getState();
++    const state = root.store.getState();
+ 
+     // If the frameloop is invalidated, do not run another frame
+     if (state.internal.active && (state.frameloop === 'always' || state.internal.frames > 0) && !((_state$gl$xr = state.gl.xr) != null && _state$gl$xr.isPresenting)) {

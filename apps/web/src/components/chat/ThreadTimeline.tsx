@@ -9,7 +9,10 @@ import {
   resolveThreadSwitchTimeline,
   timelineHasEphemeralPreviewUrls,
 } from "../ChatView.logic";
+import { LinkRequestCard } from "./LinkRequestCard";
+import { SecretRequestCard } from "./SecretRequestCard";
 import { MessagesTimeline } from "./MessagesTimeline";
+import { cleanTranscript, hasUnknownResponseKind } from "./cleanTranscript";
 
 /**
  * The timeline with the streamed text. ChatView reads the thread through its quiet
@@ -18,6 +21,7 @@ import { MessagesTimeline } from "./MessagesTimeline";
  * assistant text reaches only its own row, through useAssistantMessageText.
  */
 export function ThreadTimeline({
+  clean = false,
   threadDetailRef,
   entriesInput,
   draftEntries,
@@ -26,6 +30,7 @@ export function ThreadTimeline({
   detailLoading,
   ...timelineProps
 }: Omit<ComponentProps<typeof MessagesTimeline>, "timelineEntries"> & {
+  clean?: boolean;
   /** Null until the thread's detail may load; see resolveThreadDetailRef. */
   threadDetailRef: ScopedThreadRef | null;
   entriesInput: Omit<TimelineEntriesInput, "visibleTurnItems">;
@@ -54,5 +59,59 @@ export function ThreadTimeline({
     }
     rememberReadyThreadTimeline({ threadKey: activeThreadKey, entries });
   }, [activeThreadKey, detailLoading, entries]);
-  return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  if (!clean) return <MessagesTimeline {...timelineProps} timelineEntries={displayedEntries} />;
+  const requests = displayedEntries.filter(
+    (entry) =>
+      entry.kind === "event" &&
+      (entry.projectedItem.item.type === "secret_request" ||
+        entry.projectedItem.item.type === "link_request"),
+  );
+  return (
+    <>
+      {hasUnknownResponseKind(displayedEntries) ? (
+        <p className="px-4 py-2 text-xs text-muted-foreground">
+          Some responses have no final-response metadata. Open this thread in normal T3 chat to see
+          its full history.
+        </p>
+      ) : null}
+      {requests.length > 0 ? (
+        <section
+          aria-label="Operational requests"
+          className="flex max-h-52 min-h-0 shrink-0 flex-col border-b"
+        >
+          <p className="px-4 py-2 text-xs font-medium text-muted-foreground">
+            Requests and decisions
+          </p>
+          <div className="overflow-auto px-4 pb-3">
+            {threadDetailRef
+              ? requests.map((entry) => {
+                  if (entry.kind !== "event") return null;
+                  const { item, visibility } = entry.projectedItem;
+                  return item.type === "secret_request" ? (
+                    <SecretRequestCard
+                      key={entry.id}
+                      environmentId={threadDetailRef.environmentId}
+                      item={item}
+                      visibility={visibility}
+                    />
+                  ) : item.type === "link_request" ? (
+                    <LinkRequestCard
+                      key={entry.id}
+                      environmentId={threadDetailRef.environmentId}
+                      item={item}
+                      visibility={visibility}
+                    />
+                  ) : null;
+                })
+              : null}
+          </div>
+        </section>
+      ) : null}
+      <MessagesTimeline
+        {...timelineProps}
+        clean
+        timelineEntries={cleanTranscript(displayedEntries)}
+      />
+    </>
+  );
 }

@@ -2,7 +2,12 @@ import { describe, expect, it } from "vite-plus/test";
 import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import { isJsonToolText, turnItemOutputImages, turnItemOutputText } from "./itemDetail.ts";
+import {
+  isJsonToolText,
+  turnItemHasDetail,
+  turnItemOutputImages,
+  turnItemOutputText,
+} from "./itemDetail.ts";
 
 describe("isJsonToolText", () => {
   it.each([
@@ -112,4 +117,21 @@ describe("tool image output parsing", () => {
       );
     },
   );
+});
+
+it("allows inspection of file-only tool output and unavailable files", () => {
+  expect(
+    turnItemHasDetail({
+      ...toolItem(undefined),
+      outputAttachments: [
+        { type: "file", id: "tool-file", name: "result.txt", mimeType: "text/plain", sizeBytes: 5 },
+      ],
+    }),
+  ).toBe(true);
+  expect(
+    turnItemHasDetail({
+      ...toolItem(undefined),
+      outputAttachmentErrors: ["Attachment unavailable"],
+    }),
+  ).toBe(true);
 });

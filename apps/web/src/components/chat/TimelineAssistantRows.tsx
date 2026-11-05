@@ -23,6 +23,14 @@ import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../times
 import { useV2ItemSupport } from "../../state/v2ItemSupport";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
 import { MESSAGE_HEADING_LEVEL, MessageAuthorHeading } from "./TimelineRowParts";
+import { GuestMessageAttachments } from "./GuestMessageAttachments";
+import { useAssetUrls } from "../../assets/assetUrls";
+import {
+  createMessageAttachmentPreviewProjector,
+  selectMessageImageResources,
+} from "../../session-logic";
+import { isFileAttachment, isImageAttachment } from "../../types";
+import { buildExpandedImagePreview } from "./ExpandedImagePreview";
 
 export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
@@ -32,34 +40,39 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
     row.projectedItem?.item.id,
   );
   const text = liveText ?? row.message.text;
-  const messageText = text || (row.message.streaming ? "" : "(empty response)");
+  const attachments = row.message.attachments ?? [];
+  const messageText =
+    text || (row.message.streaming || attachments.length > 0 ? "" : "(empty response)");
 
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
         <MessageAuthorHeading>T3 Code</MessageAuthorHeading>
-        <div data-thread-find-text="true">
-          <AssistantCitationSource
-            messageId={row.message.id}
-            {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}
-            itemKey={row.id}
-            request={ctx.citationRequest}
-            listRef={ctx.listRef}
-          >
-            <ChatMarkdown
-              text={messageText}
-              cwd={ctx.markdownCwd}
-              threadRef={ctx.threadRef ?? undefined}
-              isStreaming={Boolean(row.message.streaming)}
-              lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-              skills={ctx.skills}
-              headingLevelOffset={MESSAGE_HEADING_LEVEL}
-              onUseArtifactTemplate={ctx.onUseArtifactTemplate}
-              onRunShellCommand={ctx.onRunShellCommand}
-              onImageExpand={ctx.onImageExpand}
-            />
-          </AssistantCitationSource>
-        </div>
+        {messageText ? (
+          <div data-thread-find-text="true">
+            <AssistantCitationSource
+              messageId={row.message.id}
+              {...(ctx.threadRef ? { threadRef: ctx.threadRef } : {})}
+              itemKey={row.id}
+              request={ctx.citationRequest}
+              listRef={ctx.listRef}
+            >
+              <ChatMarkdown
+                text={messageText}
+                cwd={ctx.markdownCwd}
+                threadRef={ctx.threadRef ?? undefined}
+                isStreaming={Boolean(row.message.streaming)}
+                lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+                skills={ctx.skills}
+                headingLevelOffset={MESSAGE_HEADING_LEVEL}
+                onUseArtifactTemplate={ctx.onUseArtifactTemplate}
+                onRunShellCommand={ctx.onRunShellCommand}
+                onImageExpand={ctx.onImageExpand}
+              />
+            </AssistantCitationSource>
+          </div>
+        ) : null}
+        {attachments.length > 0 ? <AssistantMessageAttachments message={row.message} /> : null}
         {ctx.onOpenTurnDiff ? (
           <AssistantChangedFilesSection
             turnSummary={row.assistantTurnDiffSummary}
@@ -78,6 +91,41 @@ export function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind
           />
         ) : null}
       </div>
+    </>
+  );
+}
+
+function AssistantMessageAttachments({ message }: { message: ChatMessage }) {
+  const ctx = use(TimelineRowCtx);
+  const resources = selectMessageImageResources(message.attachments);
+  const urls = useAssetUrls(ctx.activeThreadEnvironmentId, resources);
+  const [projectPreviews] = useState(createMessageAttachmentPreviewProjector);
+  const imageUrls = new Map(
+    resources.map((resource, index) => [resource.attachmentId, urls[index]]),
+  );
+  const attachments =
+    projectPreviews(message, (attachment) => imageUrls.get(attachment.id) ?? undefined)
+      .attachments ?? [];
+  const images = attachments.filter(isImageAttachment);
+  const unknown = attachments.filter(
+    (attachment) => !isImageAttachment(attachment) && !isFileAttachment(attachment),
+  );
+  return (
+    <>
+      <GuestMessageAttachments
+        attachments={attachments}
+        imageUrl={(attachment) => images.find((image) => image.id === attachment.id)?.previewUrl}
+        onOpenImage={(attachment) => {
+          const preview = buildExpandedImagePreview(images, attachment.id);
+          if (preview) ctx.onImageExpand(preview);
+        }}
+        onOpenFile={ctx.onFileOpen}
+      />
+      {unknown.map((attachment) => (
+        <p key={attachment.id} className="py-1 text-sm">
+          {attachment.name}
+        </p>
+      ))}
     </>
   );
 }

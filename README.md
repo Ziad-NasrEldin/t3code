@@ -1,4 +1,89 @@
-# T3 Code
+# Signal Crew Office
+
+**Your coding agents. One living office.**
+
+Turn parallel agent work into a place you can see. Signal Crew Office gives your
+projects their own rooms and your agents a presence on an interactive 3D office
+floor. See who's working, find the agent waiting for you, and open the conversation
+right where the work is happening.
+
+![Signal Crew Office with project rooms, agents, and a searchable directory](./docs/images/signal-crew/office-overview.png)
+
+_Actual development-build captures with demo projects and replay agents. Completed
+agents are shown to illustrate the floor; screenshots may include work ahead of
+the published source._
+
+Built on [T3 Code](https://github.com/pingdotgg/t3code), with its agent providers,
+conversations, and remote connections underneath. This is
+[Ziad-NasrEldin's independent fork](https://github.com/Ziad-NasrEldin/t3code);
+credit for the original platform belongs to the upstream T3 Code team.
+
+## Meet your crew
+
+- **A room for every active project.** Explore a shared office floor, zoom into
+  a project, or jump straight to an agent from the searchable directory.
+- **Know who needs you.** Follow agent status and activity excerpts, and filter
+  the directory to work that needs attention.
+- **Go from overview to conversation.** Select an agent and open its chat inside
+  Office. Pause a running turn or settle an eligible thread using T3 Code's
+  existing controls and permissions.
+- **Keep the floor focused.** Active work appears by default. Bring completed
+  agents back into view when you want to revisit retained work.
+- **Give the office some personality.** Send a selected agent for coffee, to the
+  sofa, or to a game. These visits are playful animations; they never send a prompt
+  or change the agent's task.
+- **Set your own atmosphere.** Optional music, sound effects, activity bubbles,
+  reduced motion, and a lower graphics load let you tune the experience.
+- **Take your seat from another Mac.** Connect to the host environment through
+  T3 Connect and follow the same work from an Office-enabled client.
+
+### From the floor to the conversation
+
+Select an agent to see its status and open its chat. Thread controls stay close
+to the work, with availability based on the agent's state and your permissions.
+
+![Selected agent with Open chat, Settle thread, and Pause chat controls](./docs/images/signal-crew/agent-controls.png)
+
+### A little room to breathe
+
+The shared lobby brings the crew together around sofas, coffee, and a game table.
+Optional cosmetic visits add life to the office while agents keep their real tasks.
+
+![Close-up of the Signal Crew lobby, coffee station, sofas, and agents](./docs/images/signal-crew/office-lobby.png)
+
+## Try Signal Crew Office
+
+Office is under active development on `feat/signal-crew-office`.
+Install [Vite+](#install-vp) and run:
+
+```bash
+git clone --branch feat/signal-crew-office https://github.com/Ziad-NasrEldin/t3code.git
+cd t3code
+vp i
+vp run dev
+```
+
+Open the pairing URL printed by the dev runner, connect a provider, start a thread,
+and open **Office**. For the Electron client, use `vp run dev:desktop` instead.
+See [development setup](./docs/operations/development.md) for full instructions.
+
+### Use Office from another Mac
+
+Keep the machine hosting your agents awake and T3 Code running. In its desktop app,
+open **Settings → Sharing & access**, sign in, and enable **T3 Connect**. On your
+other Mac, use a build of this fork that includes Office, sign in to the same
+T3 Connect account, select the host environment, and open **Office**.
+
+Agents and project files stay on the host. Connecting another Mac does not copy
+repositories or move running agents. To run agents on that Mac too, set it up as
+its own environment with its own projects and authenticated providers.
+
+See [remote access](./docs/user/remote-access.md) for pairing and connection options,
+and [development setup](./docs/operations/development.md) to run this fork from source.
+The installation commands and release links below install upstream T3 Code;
+they do not install this fork's Office customizations.
+
+## About T3 Code
 
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 

@@ -393,6 +393,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      cleanTranscript?: boolean;
       /** A side chat in its parent's right panel; the parent keeps the keyboard and workspace UI. */
       embedded?: SideChatParentPanel;
       routeKind: "server";
@@ -404,6 +405,7 @@ type ChatViewProps =
       onDiffPanelOpen?: () => void;
       reserveTitleBarControlInset?: boolean;
       forceExpandedMobileComposer?: boolean;
+      cleanTranscript?: boolean;
       embedded?: never;
       routeKind: "draft";
       draftId: DraftId;
@@ -419,6 +421,7 @@ export default function ChatView(props: ChatViewProps) {
     onDiffPanelOpen,
     reserveTitleBarControlInset = true,
     forceExpandedMobileComposer = false,
+    cleanTranscript = false,
     embedded: parentPanel,
   } = props;
   const embedded = parentPanel !== undefined;
@@ -3341,6 +3344,18 @@ export default function ChatView(props: ChatViewProps) {
             />
           </header>
         )}
+        {cleanTranscript ? (
+          <p className="shrink-0 border-b px-4 py-1.5 text-xs text-muted-foreground">
+            {activeThread?.modelSelection.model ?? "Model unavailable"} ·{" "}
+            {activeThread?.modelSelection.options?.find(
+              (option) => option.id === "reasoningEffort" || option.id === "effort",
+            )?.value ?? "Effort follows model settings"}{" "}
+            ·{" "}
+            {activeContextWindow
+              ? `${activeContextWindow.usedTokens.toLocaleString()} context tokens${activeContextWindow.maxTokens != null ? ` of ${activeContextWindow.maxTokens.toLocaleString()}` : " · capacity unavailable"}`
+              : "Context usage unavailable"}
+          </p>
+        ) : null}
 
         <div className="relative flex min-h-0 min-w-0 flex-1">
           <ThreadFindCanvas
@@ -3387,6 +3402,7 @@ export default function ChatView(props: ChatViewProps) {
             >
               <WorkspaceMutationIdContext value={workspaceMutationId}>
                 <ThreadTimeline
+                  clean={cleanTranscript}
                   pendingApprovals={pendingApprovals}
                   heldApprovalRequestIds={heldApprovalRequestIds}
                   respondingRequestIds={respondingRequestIds}

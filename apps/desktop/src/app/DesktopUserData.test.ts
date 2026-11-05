@@ -40,3 +40,20 @@ it.effect.each(["t3code", "T3 Code (Alpha)"])(
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
+
+it.effect("uses an explicit isolated profile without inspecting or migrating normal profiles", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-isolated-profile-" });
+    const override = path.join(directory, "isolated");
+    const resolved = yield* resolveUserDataPath({
+      appDataDirectory: directory,
+      userDataDirectory: override,
+      isDevelopment: false,
+      platform: "win32",
+    });
+    assert.equal(resolved, override);
+    assert.isFalse(yield* fs.exists(override));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

@@ -1931,6 +1931,7 @@ export const layerWsRpc = (
             : { managedPolicy: serverSettings.managedPolicy }),
           shellResumeCompletionMarker: true,
           shellThreadFamilies: true,
+          officeInventory: true,
           shellOlderSettled: true,
           threadResumeCompletionMarker: true,
           threadSnapshotPagination: true,
@@ -2121,6 +2122,16 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
           getOrchestrationV2ArchivedShellSnapshot,
+        [ORCHESTRATION_V2_WS_METHODS.getOfficePage]: (input) =>
+          threadManagement.getOfficePage(input.after).pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2GetShellSnapshotError({
+                  message: "Failed to load the office inventory",
+                  cause,
+                }),
+            ),
+          ),
         [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input) =>
           readOmittableShellRows({ familyOf: input.threadId }, "Failed to load the thread family"),
         [ORCHESTRATION_V2_WS_METHODS.getThreadTitles]: (input) =>

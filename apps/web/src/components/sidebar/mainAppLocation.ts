@@ -5,7 +5,12 @@ import { withoutAssistantCitationHash } from "../../lib/assistantCitationNavigat
 
 /** Settings and Usage open as modals over the last main-app view. */
 export function isAppModalPage(pathname: string) {
-  return pathname === "/settings" || pathname.startsWith("/settings/") || pathname === "/usage";
+  return (
+    pathname === "/office" ||
+    pathname === "/settings" ||
+    pathname.startsWith("/settings/") ||
+    pathname === "/usage"
+  );
 }
 
 export function isSidebarUtilityPage(pathname: string) {

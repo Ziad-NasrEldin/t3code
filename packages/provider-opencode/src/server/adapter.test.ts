@@ -35,6 +35,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
@@ -319,6 +321,216 @@ describe("OpenCodeAdapterV2", () => {
     ),
   );
 
+  it.effect("persists assistant-owned inline file parts across streaming and snapshot replay", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped();
+      const events = asyncEventStream();
+      const root = "file-root";
+      const part = {
+        id: "file-part",
+        sessionID: root,
+        messageID: "file-answer",
+        type: "file" as const,
+        mime: "text/plain",
+        filename: "result.txt",
+        url: "data:text/plain;base64,T2ZmaWNlIHJlc3VsdA==",
+      };
+      const parts: Array<
+        | typeof part
+        | { id: string; sessionID: string; messageID: string; type: "text"; text: string }
+      > = [part];
+      const info = {
+        id: part.messageID,
+        sessionID: root,
+        role: "assistant" as "assistant" | "user",
+        finish: "stop",
+        time: { created: 1, completed: 2 },
+      };
+      const harness = yield* makeOpenCodeRuntimeHarness(
+        "output-file",
+        root,
+        {
+          event: { subscribe: async () => ({ stream: events.stream }) },
+          session: {
+            create: async () => ({ data: { id: root, time: { created: 1, updated: 1 } } }),
+            promptAsync: async () => ({ data: true }),
+            get: async () => ({ data: { id: root, time: { created: 1, updated: 2 } } }),
+            children: async () => ({ data: [] }),
+            messages: async () => ({ data: [{ info, parts }] }),
+          },
+        },
+        { resolveAttachmentPath: (attachment) => path.join(directory, `${attachment.id}.txt`) },
+      );
+      yield* harness.startTurn();
+      const collected = yield* harness.runtime.events.pipe(
+        Stream.takeUntil((event) => event.type === "turn.terminal"),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+      yield* Effect.promise(() =>
+        events.push({ type: "message.part.updated", properties: { part } }),
+      );
+      yield* Effect.promise(() =>
+        events.push({ type: "message.updated", properties: { sessionID: root, info } }),
+      );
+      yield* Effect.promise(() =>
+        events.push({
+          type: "message.part.updated",
+          properties: {
+            part: {
+              id: "tool-with-file",
+              sessionID: root,
+              messageID: part.messageID,
+              type: "tool",
+              callID: "tool-call",
+              tool: "custom",
+              state: {
+                status: "completed",
+                input: {},
+                output: "tool result",
+                title: "Custom",
+                metadata: {},
+                time: { start: 1, end: 2 },
+                attachments: [{ ...part, id: "tool-file-part" }],
+              },
+            },
+          },
+        }),
+      );
+      yield* Effect.promise(() =>
+        events.push({ type: "session.idle", properties: { sessionID: root } }),
+      );
+      const output = yield* Fiber.join(collected);
+      const toolEvent = output.find(
+        (event) => event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool",
+      );
+      assert.isDefined(toolEvent);
+      if (toolEvent?.type === "turn_item.updated") {
+        assert.equal(toolEvent.turnItem.outputAttachments?.[0]?.name, "result.txt");
+      }
+      const finals = output.flatMap((event) =>
+        event.type === "message.updated" &&
+        event.message.role === "assistant" &&
+        event.message.responseKind === "final"
+          ? [event.message]
+          : [],
+      );
+      const final = finals.at(-1);
+      assert.isDefined(final);
+      assert.equal(final!.attachments.length, 1);
+      const attachment = final!.attachments[0]!;
+      if (toolEvent?.type === "turn_item.updated")
+        assert.notEqual(toolEvent.turnItem.outputAttachments?.[0]?.id, attachment.id);
+      assert.match(attachment.id, /-txt$/);
+      assert.equal(
+        yield* fs.readFileString(path.join(directory, `${attachment.id}.txt`)),
+        "Office result",
+      );
+      const snapshot = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.equal(snapshot.messages.length, 1);
+      assert.equal(snapshot.messages[0]!.id, final!.id);
+      assert.deepEqual(snapshot.messages[0]!.attachments, final!.attachments);
+      assert.equal(snapshot.messages[0]!.responseKind, "final");
+      const repeated = yield* harness.runtime
+        .readThreadSnapshot({
+          providerThread: harness.providerThread,
+        })
+        .pipe(Effect.provideService(FileSystem.FileSystem, FileSystem.makeNoop({})));
+      assert.deepEqual(repeated.messages, snapshot.messages);
+      const toolId =
+        toolEvent?.type === "turn_item.updated"
+          ? toolEvent.turnItem.outputAttachments?.[0]?.id
+          : undefined;
+      assert.deepEqual(
+        (yield* fs.readDirectory(directory)).sort(),
+        [`${attachment.id}.txt`, `${toolId}.txt`].sort(),
+      );
+      yield* fs.remove(path.join(directory, `${toolId}.txt`));
+      yield* fs.writeFileString(path.join(directory, `${attachment.id}.txt`), "Wrong content");
+      const collision = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.deepEqual(collision.messages[0]!.attachments, []);
+      assert.include(collision.messages[0]!.text, "Attachment unavailable");
+      assert.equal(
+        yield* fs.readFileString(path.join(directory, `${attachment.id}.txt`)),
+        "Wrong content",
+      );
+      yield* fs.remove(path.join(directory, `${attachment.id}.txt`));
+      for (const invalid of [
+        "https://untrusted.invalid/result.txt",
+        "file:///private/file",
+        "data:text/plain;base64,!!!!",
+        "data:image/png;base64,T2ZmaWNlIHJlc3VsdA==",
+        "data:text/plain;base64,",
+      ]) {
+        part.url = invalid;
+        const unavailable = yield* harness.runtime.readThreadSnapshot({
+          providerThread: harness.providerThread,
+        });
+        assert.deepEqual(unavailable.messages[0]!.attachments, []);
+        assert.include(unavailable.messages[0]!.text, "Attachment unavailable");
+        assert.deepEqual(yield* fs.readDirectory(directory), []);
+      }
+      part.url = "data:text/plain;base64,Q2hhbmdlZA==";
+      info.finish = "unknown";
+      const unknownFinality = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.isUndefined(unknownFinality.messages[0]!.responseKind);
+      assert.equal(unknownFinality.messages[0]!.attachments.length, 1);
+      info.finish = "tool-calls";
+      const commentary = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.equal(commentary.messages[0]!.responseKind, "commentary");
+      info.finish = "stop";
+      info.role = "user";
+      const userOwned = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.deepEqual(userOwned.messages, []);
+      info.role = "assistant";
+      const changed = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.notEqual(changed.messages[0]!.attachments[0]!.id, attachment.id);
+      assert.equal(
+        yield* fs.readFileString(
+          path.join(directory, `${changed.messages[0]!.attachments[0]!.id}.txt`),
+        ),
+        "Changed",
+      );
+      parts.splice(
+        0,
+        parts.length,
+        { id: "before", sessionID: root, messageID: part.messageID, type: "text", text: "before" },
+        part,
+        { id: "after", sessionID: root, messageID: part.messageID, type: "text", text: "after" },
+      );
+      const mixed = yield* harness.runtime.readThreadSnapshot({
+        providerThread: harness.providerThread,
+      });
+      assert.deepEqual(
+        mixed.messages.map((message) => [
+          message.text,
+          message.attachments.map((file) => file.name),
+        ]),
+        [
+          ["before", []],
+          ["", ["result.txt"]],
+          ["after", []],
+        ],
+      );
+    }).pipe(
+      Effect.provide([NodeServices.layer, IdAllocator.layer, McpProviderSessions.layer]),
+      Effect.scoped,
+    ),
+  );
   it.effect("classifies APIError 429 as a usage limit", () =>
     Effect.gen(function* () {
       const nativeEvents = asyncEventStream();
@@ -884,6 +1096,7 @@ describe("OpenCodeAdapterV2", () => {
                 id: "late-assistant",
                 sessionID: nativeSessionId,
                 role: "assistant",
+                finish: "stop",
                 time: { created: 1, completed: 4 },
               },
             },
@@ -926,6 +1139,11 @@ describe("OpenCodeAdapterV2", () => {
         const assistant = items.filter((item) => item.type === "assistant_message");
         assert.equal(assistant.at(-1)?.text, "Tool results received");
         assert.equal(assistant.at(-1)?.status, "completed");
+        assert.equal(assistant.at(-1)?.responseKind, "final");
+        const finals = events.filter(
+          (event) => event.type === "message.updated" && event.message.responseKind === "final",
+        );
+        assert.isAbove(finals.length, 0);
       }).pipe(
         Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
         Effect.scoped,
@@ -1022,6 +1240,19 @@ describe("OpenCodeAdapterV2", () => {
       yield* push(status(child, "idle"));
       yield* push({ type: "session.idle", properties: { sessionID: child } });
       assert.isFalse(yield* hasPendingBackgroundWork, "an idle child must not pin idle release");
+      const deleted = yield* harness.runtime.events.pipe(
+        Stream.filter(
+          (event) => event.type === "subagent.updated" && event.subagent.closedAt != null,
+        ),
+        Stream.runHead,
+        Effect.forkScoped,
+      );
+      yield* push({
+        type: "session.deleted",
+        properties: { info: { id: child, parentID: root, time: { created: 2, updated: 4 } } },
+      });
+      const closed = Option.getOrUndefined(yield* Fiber.join(deleted));
+      assert.isTrue(closed?.type === "subagent.updated" && closed.subagent.closedAt != null);
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
@@ -1568,6 +1799,7 @@ describe("OpenCodeAdapterV2", () => {
             id: "assistant-kept",
             sessionID: nativeSessionId,
             role: "assistant",
+            finish: "stop",
             time: { created: 2, completed: 3 },
           },
           parts: [{ type: "text", text: "keep this answer" }],
@@ -1631,6 +1863,10 @@ describe("OpenCodeAdapterV2", () => {
         ["user-kept", "assistant-kept"],
       );
       assert.equal(snapshot.providerThread.nativeConversationHeadRef?.nativeId, "user-kept");
+      assert.equal(
+        snapshot.messages.find((message) => message.role === "assistant")?.responseKind,
+        "final",
+      );
     }).pipe(
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,

@@ -230,6 +230,7 @@ export function turnItemOutputImages(
 }
 
 export function turnItemHasDetail(item: OrchestrationV2TurnItem): boolean {
+  if (item.outputAttachments?.length || item.outputAttachmentErrors?.length) return true;
   switch (item.type) {
     case "reasoning":
       return item.text.trim().length > 0;

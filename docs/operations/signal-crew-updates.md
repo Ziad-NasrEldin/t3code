@@ -1,0 +1,18 @@
+# Signal Crew updates
+
+The maintained branch is `feat/signal-crew-office` in `Ziad-NasrEldin/t3code`.
+The upstream check runs every six hours once its workflow is on that repository's default branch and scheduled workflows are enabled. It selects the most recently published official nightly from `pingdotgg/t3code` by publication time, ignoring stable releases and drafts, and opens a draft PR whose head is the exact official nightly commit. The PR body is the approval prompt: before any merge, ask the user to confirm that an agent will merge the maintained branch into the nightly branch, resolve conflicts, run the focused checks, and return for final merge approval.
+
+Run **Signal Crew release** only after the approved nightly PR has been merged into the maintained branch. It runs focused checks, builds an Apple Silicon installer and ZIP, and creates a draft release. Install the draft on a test copy, verify the Office view and data paths, and test an update from the previous signed Signal Crew build before publishing.
+
+The official nightly is the source revision; the published Signal Crew build is the installable artifact. Keep clients on the Signal Crew feed because pointing Electron directly at `pingdotgg/t3code` would install the upstream app and remove the custom Office edition. A published Signal Crew nightly may use the `nightly` updater channel, but it must contain the merged official revision and retain `T3CODE_DESKTOP_UPDATE_REPOSITORY=Ziad-NasrEldin/t3code`.
+
+Configure repository secret `SIGNAL_CREW_SYNC_TOKEN` as a dedicated fine-grained token with Contents, Pull requests, and Workflows write access on this repository; the built-in Actions token cannot push upstream commits that modify workflow files. Also configure `CSC_LINK` (base64 Developer ID Application certificate export), `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `MACOS_PROVISIONING_PROFILE` (base64). Set repository variable `APPLE_TEAM_ID`. The provisioning profile must match `com.t3tools.t3code.signalcrew` and the passkey entitlements required by the existing packaging script. The workflow fails if any signing input is missing.
+
+Signal Crew packaging uses `T3CODE_DESKTOP_EDITION=signal-crew` and `T3CODE_DESKTOP_UPDATE_REPOSITORY=Ziad-NasrEldin/t3code`. It retains the installed edition's `t3code-signal-crew/home` and `t3code-signal-crew/electron` paths. Install the first signed release manually to bootstrap the update feed. Subsequent published releases are delivered by the existing desktop updater. Do not replace the running app during active work.
+
+A workflow file in a local checkout is not an activated service. Repository credentials, workflow deployment, a signed initial installer, and an observed update between two versions are required before claiming automatic updates work. Back up application data before the upgrade test; database migrations may prevent simply reinstalling an older version.
+
+## Build on the maintainer Mac
+
+The local route keeps the Developer ID private key on the Mac. Store notarization credentials once with `xcrun notarytool store-credentials signal-crew`, then run `bash scripts/release-signal-crew-local.sh VERSION [OFFICIAL_NIGHTLY_TAG]` from a clean release checkout. Nightly versions require the official source tag to be merged into the release checkout. The script tests, signs with the existing certificate, notarizes using the Keychain profile, and uploads a draft release. No Apple credentials are sent to GitHub. Signal Crew can build without a provisioning profile; in that case the optional in-app browser passkey entitlements are omitted, matching the original custom installation. Official builds continue to require their profile.

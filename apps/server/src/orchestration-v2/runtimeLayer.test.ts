@@ -2617,6 +2617,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       });
       const autoSettledProjection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(autoSettledProjection.thread.settledOverride, "settled");
+      assert.equal(autoSettledProjection.thread.settlementSource, "automatic");
       assert.isNull(autoSettledProjection.thread.activeOrderKey);
       yield* orchestrator.dispatch({
         type: "thread.unsettle",
@@ -2640,6 +2641,10 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         commandId: CommandId.make("runtime-layer-lifecycle-settle"),
         threadId,
       });
+      assert.equal(
+        (yield* orchestrator.getThreadProjection(threadId)).thread.settlementSource,
+        "explicit",
+      );
       const settledProjection = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(settledProjection.thread.settledOverride, "settled");
       assert.isNotNull(settledProjection.thread.settledAt);

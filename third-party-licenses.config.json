@@ -321,7 +321,9 @@
       "version": "0.4.0",
       "license": "Apache-2.0 AND OFL-1.1",
       "generatedNotices": [
-        { "licenseId": "Apache-2.0" },
+        {
+          "licenseId": "Apache-2.0"
+        },
         {
           "licenseId": "OFL-1.1",
           "copyrights": [
@@ -868,6 +870,14 @@
       "name": "iobuffer",
       "license": "MIT",
       "sourceUrl": "https://github.com/image-js/iobuffer"
+    },
+    {
+      "name": "@react-three/fiber",
+      "version": "9.8.2",
+      "generatedNotice": {
+        "licenseId": "MIT",
+        "copyrights": ["Copyright (c) 2019-2025 Poimandres"]
+      }
     }
   ]
 }

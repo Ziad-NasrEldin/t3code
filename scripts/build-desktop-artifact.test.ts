@@ -29,6 +29,8 @@ import {
   parseWslRuntimeArchiveMembers,
   readWorkspaceConfig,
   createBuildConfig,
+  resolveDesktopBuildIconAssets,
+  resolveDesktopWebAssetBrand,
   DESKTOP_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -529,12 +531,78 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
       assert.isNull(preview.publish);
       assert.isNull(previewChannel.publish);
+      assert.equal(previewChannel.productName, "T3 Code (Nightly)");
+      assert.nestedPropertyVal(previewChannel, "mac.identity", "-");
+      assert.nestedPropertyVal(previewChannel, "dmg.background", "dmg/dmg-background-nightly.png");
+      assert.nestedPropertyVal(release, "dmg.background", "dmg/dmg-background-latest.png");
+      assert.equal(resolveDesktopWebAssetBrand("0.0.41-preview.20260912.1589"), "nightly");
+      assert.deepStrictEqual(
+        resolveDesktopBuildIconAssets("0.0.41-preview.20260912.1589"),
+        resolveDesktopBuildIconAssets("0.0.41-nightly.20260912.1589"),
+      );
       assert.deepStrictEqual(release.publish, [
         {
           provider: "github",
           owner: "pingdotgg",
           repo: "t3code",
           releaseType: "release",
+        },
+      ]);
+      const signalCrew = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.8",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_EDITION: "signal-crew",
+                GITHUB_REPOSITORY: "pingdotgg/t3code",
+              },
+            }),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(signalCrew.publish, [
+        {
+          provider: "github",
+          owner: "Ziad-NasrEldin",
+          repo: "t3code",
+          releaseType: "release",
+        },
+      ]);
+      const signalCrewNightly = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "0.1.9-nightly.20261104.1",
+        false,
+        false,
+        undefined,
+        undefined,
+      ).pipe(
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromEnv({
+              env: {
+                T3CODE_DESKTOP_EDITION: "signal-crew",
+                GITHUB_REPOSITORY: "pingdotgg/t3code",
+              },
+            }),
+          ),
+        ),
+      );
+      assert.deepStrictEqual(signalCrewNightly.publish, [
+        {
+          provider: "github",
+          owner: "Ziad-NasrEldin",
+          repo: "t3code",
+          releaseType: "prerelease",
+          channel: "nightly",
         },
       ]);
     }).pipe(

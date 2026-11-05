@@ -304,8 +304,13 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
     payload?.type === "dynamic_tool"
       ? claudeSkillInvocation(payload.toolName, payload.input)
       : undefined;
-  const plainOutput =
-    toolGroupAction(workEntry) === "read"
+  const hasToolAttachments = Boolean(
+    workEntry.projectedItem?.item.outputAttachments?.length ||
+    workEntry.projectedItem?.item.outputAttachmentErrors?.length,
+  );
+  const plainOutput = hasToolAttachments
+    ? undefined
+    : toolGroupAction(workEntry) === "read"
       ? workEntryReadOutput(workEntry, workspaceRoot)
       : skill
         ? (skill.args ?? null)

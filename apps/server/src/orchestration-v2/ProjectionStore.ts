@@ -6,6 +6,7 @@ import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import { makeThreadFind } from "./ThreadFind.ts";
 import type {
+  OrchestrationV2OfficePage,
   OrchestrationV2SearchThreadInput,
   OrchestrationV2SearchThreadResult,
   OrchestrationV2ThreadHistoryPage,
@@ -47,6 +48,7 @@ import type {
   RunAttemptId,
 } from "@t3tools/contracts";
 import {
+  OrchestrationV2OfficeChildJson,
   IDLE_COMPACTION_TEXT,
   idleCompactionOf,
   OrchestrationV2AppThreadJson as OrchestrationV2AppThreadJsonSchema,
@@ -94,7 +96,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import type * as Statement from "effect/sql/Statement";
 
 import { MCP_APP_OUTPUT_KEY } from "@t3tools/shared/mcpApp";
-import { threadHtmlRenderAttachmentIds } from "../attachmentStore.ts";
+import {
+  threadHtmlRenderAttachmentIds,
+  parseThreadSegmentFromAttachmentId,
+  toSafeThreadAttachmentSegment,
+} from "../attachmentStore.ts";
 import {
   isThreadHistoryUserTurn,
   isConversationHistoryItem,
@@ -440,6 +446,9 @@ export interface OlderSettledThreadsListing {
 }
 
 export interface ProjectionStoreV2Shape {
+  readonly getOfficePage: (
+    cursor: string | null,
+  ) => Effect.Effect<OrchestrationV2OfficePage, ProjectionStoreV2Error>;
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
@@ -1671,6 +1680,7 @@ export function threadShellFromProjection(
     createdAt: projection.thread.createdAt,
     updatedAt: projection.thread.updatedAt,
     archivedAt: projection.thread.archivedAt,
+    settlementSource: projection.thread.settlementSource,
     settledOverride: projection.thread.settledOverride,
     settledAt: projection.thread.settledAt,
     unsettledAt: projection.thread.unsettledAt ?? null,
@@ -1937,6 +1947,7 @@ function shellFromState(input: {
     createdAt: input.state.thread.createdAt,
     updatedAt: input.state.updatedAt,
     archivedAt: input.state.thread.archivedAt,
+    settlementSource: input.state.thread.settlementSource,
     settledOverride: input.state.thread.settledOverride,
     settledAt: input.state.thread.settledAt,
     unsettledAt: input.state.thread.unsettledAt ?? null,
@@ -5513,6 +5524,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         json_each(message.payload_json, '$.attachments') AS attachment
       WHERE message.thread_id = ${threadId}
     `,
+        sql<{ id: string }>`
+      SELECT DISTINCT json_extract(attachment.value, '$.id') AS id
+      FROM orchestration_v2_projection_turn_items AS item,
+        json_each(item.payload_json, '$.outputAttachments') AS attachment
+      WHERE item.thread_id = ${threadId}
+    `,
         sql<{ payload_json: string }>`
       SELECT payload_json
       FROM orchestration_v2_projection_turn_items
@@ -5539,9 +5556,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         AND json_extract(message.value, '$.status') = 'pending'
     `,
       ]).pipe(
-        Effect.map(([messages, renders, answerFiles, guestFiles]) => [
+        Effect.map(([messages, toolFiles, renders, answerFiles, guestFiles]) => [
           ...new Set([
             ...messages.map((row) => row.id),
+            ...toolFiles
+              .filter(
+                (row) =>
+                  parseThreadSegmentFromAttachmentId(row.id) ===
+                  toSafeThreadAttachmentSegment(threadId),
+              )
+              .map((row) => row.id),
             ...guestFiles.map((row) => row.id),
             ...answerFiles.map((row) => row.id),
             ...threadHtmlRenderAttachmentIds(
@@ -7392,6 +7416,95 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })));
 
+    const officeCursor = Schema.Struct({
+      thread: Schema.NullOr(Schema.String),
+      child: Schema.NullOr(Schema.String),
+      threadsDone: Schema.Boolean,
+      childrenDone: Schema.Boolean,
+    });
+    const decodeOfficeCursor = Schema.decodeUnknownEffect(Schema.fromJsonString(officeCursor));
+    const encodeOfficeCursor = Schema.encodeEffect(Schema.fromJsonString(officeCursor));
+    const decodeOfficeChild = Schema.decodeUnknownEffect(
+      Schema.fromJsonString(OrchestrationV2OfficeChildJson),
+    );
+    const getOfficePage: ProjectionStoreV2Shape["getOfficePage"] = Effect.fn(
+      "ProjectionStore.getOfficePage",
+    )(function* (cursor) {
+      const after =
+        cursor === null
+          ? { thread: null, child: null, threadsDone: false, childrenDone: false }
+          : yield* decodeOfficeCursor(cursor);
+      const threadRows = after.threadsDone
+        ? []
+        : yield* sql<{ readonly thread_id: string }>`
+        SELECT t.thread_id FROM orchestration_v2_projection_threads t
+        WHERE t.deleted_at IS NULL
+          AND (
+            (json_extract(t.payload_json,'$.archivedAt') IS NULL
+              AND (json_extract(t.payload_json,'$.settledAt') IS NULL
+                OR json_extract(t.payload_json,'$.settledOverride')='active'))
+            OR json_extract(t.payload_json,'$.lineage.relationshipToParent')='subagent'
+            OR json_type(t.payload_json,'$.delegatedFrom')='object'
+            OR EXISTS (SELECT 1 FROM orchestration_v2_projection_subagents task
+              WHERE task.thread_id=t.thread_id)
+          )
+          AND (${after.thread} IS NULL OR t.thread_id > ${after.thread})
+        ORDER BY t.thread_id LIMIT 101
+      `;
+      const childRows = after.childrenDone
+        ? []
+        : yield* sql<PayloadRow & { readonly subagent_id: string }>`
+        SELECT task.subagent_id, json_patch(json_object(
+          'id', task.subagent_id, 'threadId', task.thread_id,
+          'childThreadId', json_extract(task.payload_json,'$.childThreadId'),
+          'origin', json_extract(task.payload_json,'$.origin'),
+          'status', task.status, 'title', substr(json_extract(task.payload_json,'$.title'),1,160),
+          'progress', coalesce(substr(json_extract(task.payload_json,'$.progress'),1,240),''),
+          'result', substr(json_extract(task.payload_json,'$.result'),1,240),
+          'completedAt', json_extract(task.payload_json,'$.completedAt'),
+          'closedAt', coalesce(json_extract(task.payload_json,'$.closedAt'), child.deleted_at)
+        ), CASE WHEN json_type(task.payload_json,'$.remoteChild')='object'
+          THEN json_object('remoteChild',json_extract(task.payload_json,'$.remoteChild')) ELSE '{}' END) AS payload_json
+        FROM orchestration_v2_projection_subagents task
+        INNER JOIN orchestration_v2_projection_threads owner ON owner.thread_id=task.thread_id
+        LEFT JOIN orchestration_v2_projection_threads child ON child.thread_id=task.child_thread_id
+        WHERE owner.deleted_at IS NULL
+          AND (${after.child} IS NULL OR task.subagent_id > ${after.child})
+        ORDER BY task.subagent_id LIMIT 201
+      `;
+      const ids = threadRows.slice(0, 100).map((row) => ThreadId.make(row.thread_id));
+      const snapshot = ids.length === 0 ? null : yield* getShellSnapshot({ threadIds: ids });
+      const children = yield* Effect.forEach(childRows.slice(0, 200), (row) =>
+        decodeOfficeChild(row.payload_json),
+      );
+      const threadsDone = after.threadsDone || threadRows.length <= 100,
+        childrenDone = after.childrenDone || childRows.length <= 200;
+      return {
+        threads: [...(snapshot?.threads ?? []), ...(snapshot?.archivedThreads ?? [])].map(
+          (thread) => ({
+            ...thread,
+            latestVisibleMessage:
+              thread.latestVisibleMessage === null
+                ? null
+                : {
+                    ...thread.latestVisibleMessage,
+                    text: thread.latestVisibleMessage.text.slice(0, 240),
+                  },
+          }),
+        ),
+        children,
+        next:
+          threadsDone && childrenDone
+            ? null
+            : yield* encodeOfficeCursor({
+                thread: ids.at(-1) ?? after.thread,
+                child: childRows[Math.min(199, childRows.length - 1)]?.subagent_id ?? after.child,
+                threadsDone,
+                childrenDone,
+              }),
+      };
+    }, Effect.mapError(shellSnapshotReadError));
+
     const readOnReader =
       <Args extends ReadonlyArray<unknown>, A, E, R>(
         method: (...args: Args) => Effect.Effect<A, E, R>,
@@ -7402,6 +7515,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
     return {
       apply,
       getAgentAwarenessSnapshot: readOnReader(getAgentAwarenessSnapshot),
+      getOfficePage: readOnReader(getOfficePage),
       getShellSnapshot: readOnReader(getShellSnapshot),
       getPullRequestSnapshot: readOnReader(getPullRequestSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),

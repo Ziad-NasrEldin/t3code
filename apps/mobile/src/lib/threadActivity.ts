@@ -829,9 +829,11 @@ function toFeedActivity(
     detail,
     canExpand:
       !(item.type === "error" && item.status === "failed") &&
-      (readPaths
-        ? readPaths.length > 0 || turnItemNeedsDetailFetch(item)
-        : turnItemHasDetail(item) || workEntry.questionAnswer !== undefined),
+      (item.outputAttachments?.length || item.outputAttachmentErrors?.length
+        ? true
+        : readPaths
+          ? readPaths.length > 0 || turnItemNeedsDetailFetch(item)
+          : turnItemHasDetail(item) || workEntry.questionAnswer !== undefined),
     fetchesDetail: turnItemNeedsDetailFetch(item),
     getFullDetail,
     getCopyText,

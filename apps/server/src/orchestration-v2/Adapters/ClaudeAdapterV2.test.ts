@@ -9433,6 +9433,107 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     ),
   );
 
+  it.effect("classifies every SDK final block by its closing provider message stop reason", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("multipart-final"),
+          text: "Go.",
+          attachments: [],
+        }),
+      );
+      const part = (
+        uuid: string,
+        id: string,
+        text: string,
+        stop_reason: "tool_use" | "end_turn" | "pause_turn" | null,
+      ) => {
+        const frame = makeAssistantTextFrame({ uuid, text });
+        if (frame.type !== "assistant") throw new Error("Expected assistant fixture");
+        return claudeSdkFrame({
+          ...frame,
+          type: "assistant",
+          message: { ...frame.message, id, stop_reason },
+        });
+      };
+      yield* Queue.offerAll(harness.sdkMessages, [
+        part("paused-part", "paused-message", "Provider continuation.", "pause_turn"),
+        part("progress-part", "progress-message", "Checking files.", "tool_use"),
+        part("first-part", "final-message", "First final part.", null),
+        part("second-part", "final-message", "Second final part.", "end_turn"),
+        makeResultFrame({
+          uuid: "multipart-result",
+          result: "First final part. Second final part.",
+        }),
+      ]);
+      yield* Queue.take(harness.terminalReceipts);
+      const messages = new Map(
+        harness.events.flatMap((event) =>
+          event.type === "message.updated" && event.message.role === "assistant"
+            ? [[event.message.id, event.message] as const]
+            : [],
+        ),
+      );
+      assert.deepEqual(
+        [...messages.values()].map((message) => [message.text, message.responseKind]),
+        [
+          ["Provider continuation.", undefined],
+          ["Checking files.", "commentary"],
+          ["First final part.", "final"],
+          ["Second final part.", "final"],
+        ],
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
+  it.effect("keeps result-only fallback finality unknown", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeWakeHarness;
+      yield* harness.runtime.startTurn(
+        makeClaudeTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("result-only-finality"),
+          text: "Go.",
+          attachments: [],
+        }),
+      );
+      yield* Queue.offer(
+        harness.sdkMessages,
+        makeResultFrame({ uuid: "result-only", result: "Done." }),
+      );
+      yield* Queue.take(harness.terminalReceipts);
+      const message = harness.events.find(
+        (event) => event.type === "message.updated" && event.message.text === "Done.",
+      );
+      assert.isTrue(message?.type === "message.updated");
+      if (message?.type === "message.updated") assert.isUndefined(message.message.responseKind);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          IdAllocator.layer,
+          McpProviderSessions.layer,
+          NodeServices.layer,
+          NodeCrypto.layer,
+        ),
+      ),
+    ),
+  );
+
   it.effect("resolves API retries on resumed assistant activity", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -12503,6 +12604,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly parentToolUseId: string;
     readonly uuid: string;
     readonly messageId?: string;
+    readonly stopReason?: "tool_use" | "end_turn" | null;
     readonly text?: string;
     readonly bashToolUseId?: string;
   }): ReadonlyArray<SDKMessage> =>
@@ -12527,6 +12629,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           type: "message",
           role: "assistant",
           content: [block],
+          ...(input.stopReason === undefined ? {} : { stop_reason: input.stopReason }),
         },
         parent_tool_use_id: input.parentToolUseId,
         uuid: index === 0 ? input.uuid : `${input.uuid}:${index}`,
@@ -14231,6 +14334,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
               parentToolUseId: TOOL_USE_ID,
               uuid: "00000000-0000-4000-8000-000000000a06",
               text: "Second.",
+              messageId: "child-multipart-final",
+              stopReason: null,
+            }),
+            ...makeSubagentAssistantFrames({
+              parentToolUseId: TOOL_USE_ID,
+              uuid: "child-final-last-part",
+              messageId: "child-multipart-final",
+              text: "Third.",
+              stopReason: "end_turn",
             }),
             makeSubagentNotificationFrame({
               taskId: TASK_ID,
@@ -14277,7 +14389,27 @@ describe("ClaudeAdapterV2 background wake turns", () => {
                 ? [`bash:${event.turnItem.status}`]
                 : [],
           );
-          assert.deepEqual(childTexts, ["First.", "Second."], `trace: ${JSON.stringify(trace)}`);
+          assert.deepEqual(
+            [...new Set(childTexts)],
+            ["First.", "Second.", "Third."],
+            `trace: ${JSON.stringify(trace)}`,
+          );
+          const latest = new Map(
+            harness.events.flatMap((event) =>
+              event.type === "message.updated" && event.message.threadId === routing.childThreadId
+                ? [[event.message.id, event.message] as const]
+                : [],
+            ),
+          );
+          assert.deepEqual(
+            [...latest.values()]
+              .filter(
+                (message) =>
+                  ["Second.", "Third."].includes(message.text) && message.responseKind === "final",
+              )
+              .map((message) => message.text),
+            ["Second.", "Third."],
+          );
           assert.deepEqual(
             [...(routing.toolThreadIds.get(BASH) ?? [])],
             [routing.childThreadId],

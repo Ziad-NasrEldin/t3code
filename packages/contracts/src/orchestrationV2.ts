@@ -474,6 +474,7 @@ export const OrchestrationV2AppThread = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["explicit", "automatic"]))),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
@@ -916,6 +917,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
   updatedAt: Schema.DateTimeUtc,
+  /** Explicit release only; completion, interruption and provider unload are not closure. */
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   /** Same as this subagent's previous record on this stream: its snapshot or `subagent.updated`. */
   promptOmitted: DedupedBodyMarker,
   resultOmitted: DedupedBodyMarker,
@@ -1285,7 +1288,12 @@ export type OrchestrationV2Notification = typeof OrchestrationV2Notification.Typ
 export const OrchestrationV2IdleCompaction = Schema.Literals(["beforeCacheExpires", "onReturn"]);
 export type OrchestrationV2IdleCompaction = typeof OrchestrationV2IdleCompaction.Type;
 
+/** Provider-authored response semantics; absence in older history means unknown. */
+export const OrchestrationV2AssistantResponseKind = Schema.Literals(["commentary", "final"]);
+export type OrchestrationV2AssistantResponseKind = typeof OrchestrationV2AssistantResponseKind.Type;
+
 export const OrchestrationV2ConversationMessage = Schema.Struct({
+  responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
   notification: Schema.optional(OrchestrationV2Notification),
   ...OrchestrationV2CreationFields,
   scheduledTaskId: Schema.optional(ScheduledTaskId),
@@ -1493,6 +1501,9 @@ export const OrchestrationV2ModelSwitch = Schema.Struct({
 export type OrchestrationV2ModelSwitch = typeof OrchestrationV2ModelSwitch.Type;
 
 const OrchestrationV2TurnItemBaseFields = {
+  /** Persisted tool output stays on its originating item, separate from assistant replies. */
+  outputAttachments: Schema.optional(Schema.Array(ChatAttachment)),
+  outputAttachmentErrors: Schema.optional(Schema.Array(Schema.String)),
   /** Wire-only cursor for collapsed work; persisted items keep their complete history. */
   deferredWork: Schema.optionalKey(
     Schema.Struct({
@@ -1618,6 +1629,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemBaseFields,
     type: Schema.Literal("assistant_message"),
+    responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
     messageId: MessageId,
     text: Schema.String,
     textOmitted: DedupedBodyMarker,
@@ -2125,6 +2137,7 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   updatedAt: Schema.DateTimeUtc,
   archivedAt: Schema.NullOr(Schema.DateTimeUtc),
+  settlementSource: Schema.optional(Schema.NullOr(Schema.Literals(["explicit", "automatic"]))),
   settledOverride: Schema.NullOr(Schema.Literals(["settled", "active"])),
   settledAt: Schema.NullOr(Schema.DateTimeUtc),
   unsettledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
@@ -2324,6 +2337,7 @@ export type OrchestrationV2ExecutionNodeJson = typeof OrchestrationV2ExecutionNo
 
 export const OrchestrationV2SubagentJson = OrchestrationV2Subagent.mapFields((fields) => ({
   ...fields,
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   updatedAt: Schema.DateTimeUtcFromString,
@@ -2452,6 +2466,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
   Schema.Struct({
     ...OrchestrationV2TurnItemJsonBaseFields,
     type: Schema.Literal("assistant_message"),
+    responseKind: Schema.optional(OrchestrationV2AssistantResponseKind),
     messageId: MessageId,
     text: Schema.String,
     attachments: Schema.optional(Schema.Array(ChatAttachment)),
@@ -3581,6 +3596,7 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getArchivedShellSnapshot: "orchestration.getArchivedShellSnapshot",
   getThreadFamily: "orchestration.getThreadFamily",
   getThreadTitles: "orchestration.getThreadTitles",
+  getOfficePage: "orchestration.getOfficePage",
   getWorktreeThreadIds: "orchestration.getWorktreeThreadIds",
   getOlderSettledThreads: "orchestration.getOlderSettledThreads",
   getThreadProjection: "orchestration.getThreadProjection",
@@ -4209,6 +4225,32 @@ export class OrchestrationV2SearchThreadError extends Schema.TaggedError<Orchest
   }
 }
 
+export const OrchestrationV2OfficeChild = Schema.Struct({
+  id: NodeId,
+  threadId: ThreadId,
+  childThreadId: Schema.NullOr(ThreadId),
+  remoteChild: OrchestrationV2Subagent.fields.remoteChild,
+  origin: OrchestrationV2Subagent.fields.origin,
+  status: OrchestrationV2Subagent.fields.status,
+  title: Schema.NullOr(Schema.String),
+  progress: Schema.optional(Schema.String),
+  result: Schema.NullOr(Schema.String),
+  closedAt: OrchestrationV2Subagent.fields.closedAt,
+  completedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
+});
+export type OrchestrationV2OfficeChild = typeof OrchestrationV2OfficeChild.Type;
+export const OrchestrationV2OfficeChildJson = OrchestrationV2OfficeChild.mapFields((fields) => ({
+  ...fields,
+  closedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  completedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+}));
+export const OrchestrationV2OfficePage = Schema.Struct({
+  threads: Schema.Array(OrchestrationV2ThreadShell),
+  children: Schema.Array(OrchestrationV2OfficeChild),
+  next: Schema.NullOr(Schema.String),
+});
+export type OrchestrationV2OfficePage = typeof OrchestrationV2OfficePage.Type;
+
 export const OrchestrationV2RpcSchemas = {
   searchThread: {
     input: OrchestrationV2SearchThreadInput,
@@ -4229,6 +4271,10 @@ export const OrchestrationV2RpcSchemas = {
   getArchivedShellSnapshot: {
     input: Schema.Struct({}),
     output: OrchestrationV2ArchivedShellSnapshot,
+  },
+  getOfficePage: {
+    input: Schema.Struct({ after: Schema.NullOr(Schema.String) }),
+    output: OrchestrationV2OfficePage,
   },
   getThreadFamily: {
     input: OrchestrationV2GetThreadFamilyInput,

@@ -197,6 +197,7 @@ const makeTestRelay = Effect.fnUntraced(function* (
               threads: thread === null ? [] : [thread],
             })),
           ),
+    getOfficePage: () => Effect.succeed({ threads: [], children: [], next: null }),
     listActiveSubagentThreadIds: unused,
     listAppOwnedChildThreadIds: unused,
     countThreads: unused,

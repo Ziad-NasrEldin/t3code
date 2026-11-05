@@ -36,6 +36,7 @@ import {
   type ColorValue,
   Easing,
   Pressable,
+  Linking,
   ScrollView,
   StyleSheet,
   useAnimatedValue,
@@ -44,6 +45,7 @@ import {
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import {
   ORCHESTRATION_V2_WORKSPACE_PREPARATION_FAILURE_CODE,
+  type ChatAttachment,
   type EnvironmentId,
   type RunId,
   type ThreadId,
@@ -103,6 +105,31 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { useAssetUrl } from "../../state/assets";
+
+function ToolAttachment(props: {
+  readonly environmentId: EnvironmentId;
+  readonly attachment: ChatAttachment;
+}) {
+  const file = props.attachment;
+  const url = useAssetUrl(props.environmentId, {
+    _tag: "attachment",
+    attachmentId: file.id,
+    fileName: file.name,
+    mimeType: file.mimeType,
+  });
+  return (
+    <Pressable
+      accessibilityRole="link"
+      accessibilityLabel={file.name}
+      disabled={!url}
+      onPress={() => {
+        if (url) void Linking.openURL(url);
+      }}
+    >
+      <Text className="text-sm text-foreground underline">{file.name}</Text>
+    </Pressable>
+  );
+}
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
@@ -1048,7 +1075,12 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         ? turnItemOutputText(shownItem)
         : fetchedItem
           ? (turnItemOutputText(fetchedItem) ??
-            (outputImages.length > 0 || viewedImagePath ? null : "No output."))
+            (outputImages.length > 0 ||
+            shownItem.outputAttachments?.length ||
+            shownItem.outputAttachmentErrors?.length ||
+            viewedImagePath
+              ? null
+              : "No output."))
           : fetchedDetail.error
             ? `Couldn't load output: ${fetchedDetail.error}`
             : row.fetchesDetail
@@ -1209,6 +1241,8 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
         call ||
         fetchedOutput ||
         viewedImagePath ||
+        (shownItem.outputAttachments?.length ?? 0) > 0 ||
+        (shownItem.outputAttachmentErrors?.length ?? 0) > 0 ||
         outputImages.length > 0 ||
         row.workEntry.questionAnswer) ? (
         <Animated.View
@@ -1223,6 +1257,18 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               answer={row.workEntry.questionAnswer}
             />
           ) : null}
+          {(shownItem.outputAttachments ?? []).map((attachment) => (
+            <ToolAttachment
+              key={attachment.id}
+              environmentId={props.environmentId}
+              attachment={attachment}
+            />
+          ))}
+          {(shownItem.outputAttachmentErrors ?? []).map((error) => (
+            <Text key={error} className="text-sm text-foreground-muted">
+              {error}
+            </Text>
+          ))}
           {viewedImagePath ? (
             <View className="pb-1.5">
               {props.renderImage({ href: viewedImagePath, alt: null, title: null })}

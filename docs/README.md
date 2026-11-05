@@ -5,6 +5,7 @@
 - [Install T3 Code](./user/install.md)
 - [Messages and context](./user/composer.md)
 - [Working with threads](./user/thread-sidebar.md)
+- [Agent office](./user/agent-office.md)
 - [Permission modes](./user/permission-modes.md)
 - [Terminal history](./user/terminal.md)
 - [Source control](./user/source-control.md)

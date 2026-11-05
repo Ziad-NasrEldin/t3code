@@ -22,7 +22,7 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 import {
   ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS,
   toSafeThreadAttachmentSegment,
-} from "../attachmentStore.ts";
+} from "@t3tools/shared/attachmentIdentity";
 import type * as ResourceAttribution from "../resourceTelemetry/ResourceAttribution.ts";
 
 const MEBIBYTE = 1024 * 1024;

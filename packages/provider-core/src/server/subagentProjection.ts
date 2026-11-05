@@ -111,6 +111,7 @@ export function makeSubagentConversationArtifacts(input: {
   readonly nativeItemRef: OrchestrationV2ProviderRef | null;
   readonly role: "user" | "assistant";
   readonly text: string;
+  readonly responseKind?: "final" | "commentary";
   readonly workflowScript?: boolean;
   readonly ordinal: number;
   readonly now: DateTime.Utc;
@@ -126,6 +127,9 @@ export function makeSubagentConversationArtifacts(input: {
     runId: null,
     nodeId: input.rootNodeId,
     role: input.role,
+    ...(input.role === "assistant" && input.responseKind
+      ? { responseKind: input.responseKind }
+      : {}),
     ...(input.role === "user" && input.senderThreadId !== undefined
       ? { senderThreadId: input.senderThreadId }
       : {}),
@@ -171,6 +175,7 @@ export function makeSubagentConversationArtifacts(input: {
       : {
           ...base,
           type: "assistant_message",
+          ...(input.responseKind ? { responseKind: input.responseKind } : {}),
           streaming: false,
         };
   return { message, turnItem };

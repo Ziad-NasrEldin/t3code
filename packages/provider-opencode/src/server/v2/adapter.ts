@@ -88,6 +88,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
 import { openCodeCommandFailed, openCodeToolTurnItem } from "../toolItems.ts";
+import { captureToolOutputAttachments } from "../outputAttachment.ts";
 
 const OpenCode2ProviderCapabilities = {
   sessions: {
@@ -198,6 +199,8 @@ interface ActiveTurn {
   readonly input: TurnOwner;
   providerTurn: OrchestrationV2ProviderTurn;
   readonly texts: Map<string, OpenBlock>;
+  readonly completedTexts: Map<string, OpenBlock>;
+  readonly responseKinds: Map<string, "final" | "commentary">;
   readonly tools: Map<string, { readonly name: string; input: Record<string, unknown> }>;
   readonly startedAt: Map<string, DateTime.Utc>;
   readonly ordinals: Map<string, number>;
@@ -238,6 +241,10 @@ interface ActiveTurn {
 }
 
 interface SubagentCall {
+  outputFiles?: {
+    readonly outputAttachments?: ReadonlyArray<ChatAttachment>;
+    readonly outputAttachmentErrors?: ReadonlyArray<string>;
+  };
   readonly toolId: string;
   readonly nativeId: string;
   readonly state: ThreadState;
@@ -276,6 +283,9 @@ interface OpenBlock {
 }
 
 interface ThreadState {
+  closedAt?: DateTime.Utc;
+  // Deletion must release every settled/joined call, retaining task records rather than turn closures.
+  subagentRecords?: Map<string, OrchestrationV2Subagent>;
   readonly sessionId: string;
   providerThread: OrchestrationV2ProviderThread;
   publishedBackgroundWork?: boolean;
@@ -723,7 +733,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event, Cause.Done>();
     const threads = new Map<string, ThreadState>();
     const childOwners = new Map<string, ThreadState>();
-    const announced = new Map<string, EventOf<"session.created">["data"]>();
+    const announced = new Map<
+      string,
+      EventOf<"session.created">["data"] & { readonly closedAt?: DateTime.Utc }
+    >();
     const strays = new Map<string, ThreadState>();
     const busy = new Set<string>();
     const pending = new Map<RuntimeRequestId, PendingRequest>();
@@ -936,15 +949,21 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     ) {
       const nativeId = `${data.assistantMessageID}:${kind}:${data.ordinal}`;
       const updatedAt = yield* DateTime.now;
-      const entry = turn.texts.get(nativeId) ?? {
-        block: data,
-        kind,
-        startedAt: updatedAt,
-        text: "",
-      };
+      const entry = turn.texts.get(nativeId) ??
+        turn.completedTexts.get(nativeId) ?? {
+          block: data,
+          kind,
+          startedAt: updatedAt,
+          text: "",
+        };
       entry.text = update(entry.text);
-      if (completed) turn.texts.delete(nativeId);
-      else turn.texts.set(nativeId, entry);
+      if (completed) {
+        turn.texts.delete(nativeId);
+        turn.completedTexts.set(nativeId, entry);
+      } else {
+        turn.completedTexts.delete(nativeId);
+        turn.texts.set(nativeId, entry);
+      }
       if (entry.text.length === 0) return;
       const status = completed ? "completed" : "running";
       const completedAt = completed ? updatedAt : null;
@@ -963,7 +982,9 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         driver,
         nativeItemId: nativeId,
       });
+      const responseKind = turn.responseKinds.get(data.assistantMessageID);
       const message: OrchestrationV2ConversationMessage = {
+        ...(responseKind ? { responseKind } : {}),
         createdBy: "agent",
         creationSource: "provider",
         id: messageId,
@@ -985,6 +1006,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           ...base,
           type: "assistant_message",
           messageId,
+          ...(responseKind ? { responseKind } : {}),
           text: entry.text,
           streaming: !completed,
         },
@@ -999,7 +1021,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       result?: {
         readonly output: string | undefined;
         readonly metadata: unknown;
-        readonly files?: ReadonlyArray<{ readonly uri: string; readonly mime: string }>;
+        readonly files?: ReadonlyArray<{
+          readonly uri: string;
+          readonly mime: string;
+          readonly name?: string | undefined;
+        }>;
       },
     ) {
       const tool = turn.tools.get(id);
@@ -1008,6 +1034,17 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
       const nativeId = `${turn.scope}${id}`;
+      const files = result?.files ?? [];
+      const attachments = yield* captureToolOutputAttachments(
+        host,
+        turn.input.threadId,
+        nativeId,
+        files.map((file) => ({
+          url: file.uri,
+          mime: file.mime,
+          ...(file.name === undefined ? {} : { filename: file.name }),
+        })),
+      ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
       const settled =
         status === "completed" && openCodeCommandFailed(tool.name, result?.metadata)
           ? "failed"
@@ -1017,7 +1054,10 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         type: "turn_item.updated",
         driver,
         turnItem: openCodeToolTurnItem(
-          itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
+          {
+            ...itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
+            ...attachments,
+          },
           {
             name: tool.name,
             input: tool.input,
@@ -1143,6 +1183,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       input: owner,
       providerTurn,
       texts: new Map(),
+      completedTexts: new Map(),
+      responseKinds: new Map(),
       tools: new Map(),
       startedAt: new Map(),
       ordinals: new Map(),
@@ -1200,31 +1242,33 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           completedAt,
         },
       });
-      yield* emit({
-        type: "subagent.updated",
+      const subagent: OrchestrationV2Subagent = {
+        id: nodeId,
+        threadId: turn.input.threadId,
+        runId: turn.input.runId,
+        parentNodeId: turn.input.rootNodeId,
+        origin: "provider_native",
+        createdBy: "agent",
         driver,
-        subagent: {
-          id: nodeId,
-          threadId: turn.input.threadId,
-          runId: turn.input.runId,
-          parentNodeId: turn.input.rootNodeId,
-          origin: "provider_native",
-          createdBy: "agent",
-          driver,
-          providerInstanceId: instanceId,
-          providerThreadId: childProviderThreadId,
-          childThreadId,
-          nativeTaskRef: ref(call.nativeId),
-          prompt: call.prompt,
-          title: call.title,
-          model: call.model,
-          status: call.status,
-          result: call.result,
-          startedAt: call.startedAt,
-          completedAt,
-          updatedAt,
-        },
-      });
+        providerInstanceId: instanceId,
+        providerThreadId: childProviderThreadId,
+        childThreadId,
+        nativeTaskRef: ref(call.nativeId),
+        prompt: call.prompt,
+        title: call.title,
+        model: call.model,
+        status: call.status,
+        ...(call.child?.closedAt ? { closedAt: call.child.closedAt } : {}),
+        result: call.result,
+        startedAt: call.startedAt,
+        completedAt,
+        updatedAt,
+      };
+      if (call.child) {
+        call.child.subagentRecords ??= new Map();
+        call.child.subagentRecords.set(subagent.id, subagent);
+      }
+      yield* emit({ type: "subagent.updated", driver, subagent });
       yield* emit({
         type: "turn_item.updated",
         driver,
@@ -1243,6 +1287,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           startedAt: call.startedAt,
           completedAt,
           updatedAt,
+          ...call.outputFiles,
           type: "subagent",
           subagentId: nodeId,
           origin: "provider_native",
@@ -1400,6 +1445,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       child.directory = call.state.directory;
       child.agent = info?.agent ?? call.agent ?? child.agent;
       child.rules = info?.permissions ?? child.rules;
+      if (info?.parentID === call.state.sessionId && info.closedAt !== undefined)
+        child.closedAt ??= info.closedAt;
       threads.set(childId, child);
       childOwners.set(childId, rootOf(call.state));
       call.child = child;
@@ -2031,6 +2078,42 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       yield* emitSubagent(call);
     });
 
+    const applyToolSuccess = Effect.fnUntraced(function* (
+      state: ThreadState,
+      turn: ActiveTurn,
+      result: Pick<EventOf<"session.tool.success">["data"], "id" | "content" | "metadata">,
+    ) {
+      const call = state.calls.get(result.id);
+      if (call !== undefined) {
+        const childId = stringField(result.metadata, "sessionID");
+        if (childId !== undefined) yield* attachChild(call, childId);
+        call.outputFiles = yield* captureToolOutputAttachments(
+          host,
+          turn.input.threadId,
+          call.nativeId,
+          result.content
+            .filter((part) => part.type === "file")
+            .map((file) => ({
+              url: file.uri,
+              mime: file.mime,
+              ...(file.name === undefined ? {} : { filename: file.name }),
+            })),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
+        // Background launch receipts retain their files while reports determine completion.
+        if (result.metadata?.["status"] === "running") {
+          call.background = true;
+          return yield* emitSubagent(call);
+        }
+        return yield* settleCall(call, "completed", subagentOutput(textOf(result.content)));
+      }
+      yield* emitTool(state, turn, result.id, "completed", {
+        output: textOf(result.content),
+        metadata: result.metadata,
+        files: result.content.filter((part) => part.type === "file"),
+      });
+      turn.tools.delete(result.id);
+    });
+
     const onTurnEvent = Effect.fnUntraced(function* (
       state: ThreadState,
       turn: ActiveTurn,
@@ -2086,28 +2169,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (call !== undefined && childId !== undefined) yield* attachChild(call, childId);
           return;
         }
-        case "session.tool.success": {
-          const call = state.calls.get(event.data.id);
-          if (call !== undefined) {
-            const childId = stringField(event.data.metadata, "sessionID");
-            if (childId !== undefined) yield* attachChild(call, childId);
-            // Background and joined-background calls return at launch; reports settle them.
-            if (event.data.metadata?.["status"] === "running") {
-              if (call.background) return;
-              call.background = true;
-              return yield* emitSubagent(call);
-            }
-            return yield* settleCall(call, "completed", subagentOutput(textOf(event.data.content)));
-          }
-          const output = textOf(event.data.content);
-          yield* emitTool(state, turn, event.data.id, "completed", {
-            output,
-            files: event.data.content.flatMap((part) => (part.type === "file" ? [part] : [])),
-            metadata: event.data.metadata,
-          });
-          turn.tools.delete(event.data.id);
-          return;
-        }
+        case "session.tool.success":
+          return yield* applyToolSuccess(state, turn, event.data);
         case "session.tool.failed": {
           const aborted = event.data.error.type === "aborted";
           const call = state.calls.get(event.data.id);
@@ -2141,6 +2204,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           return;
         case "session.step.ended":
         case "session.step.failed": {
+          if (
+            event.type === "session.step.ended" &&
+            (event.data.finish === "stop" || event.data.finish === "tool-calls")
+          ) {
+            turn.responseKinds.set(
+              event.data.assistantMessageID,
+              event.data.finish === "stop" ? "final" : "commentary",
+            );
+            for (const entry of [...turn.completedTexts.values(), ...turn.texts.values()]) {
+              if (entry.block.assistantMessageID === event.data.assistantMessageID)
+                yield* emitText(state, turn, entry.block, entry.kind, () => entry.text, true);
+            }
+          }
           const tokens = event.data.tokens;
           if (tokens === undefined) return;
           turn.steps += 1;
@@ -2297,6 +2373,25 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
 
     const handleEvent = Effect.fnUntraced(function* (event: OpenCode2Client.OpenCode2StreamEvent) {
       const sessionId = sessionOfEvent(event);
+      if (event.type === "session.deleted") {
+        for (const entry of Array.from(pending.values())) {
+          if (entry.sessionId === event.data.sessionID) yield* settleRequest(entry, "cancelled");
+        }
+        const info = announced.get(event.data.sessionID);
+        if (info !== undefined && info.closedAt === undefined)
+          announced.set(event.data.sessionID, { ...info, closedAt: yield* DateTime.now });
+        const deleted = threads.get(event.data.sessionID);
+        if (deleted?.subagent) {
+          deleted.closedAt ??= yield* DateTime.now;
+          for (const [id, task] of deleted.subagentRecords ?? []) {
+            const closed = { ...task, closedAt: deleted.closedAt, updatedAt: deleted.closedAt };
+            deleted.subagentRecords!.set(id, closed);
+            yield* emit({ type: "subagent.updated", driver, subagent: closed });
+          }
+        }
+        busy.delete(event.data.sessionID);
+        return;
+      }
       const cleared = sessionId === undefined ? undefined : clearing.get(sessionId);
       if (cleared !== undefined) {
         if (event.type === "unreadable.execution.ended" || executionEnd(event.type)) {
@@ -2334,7 +2429,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         const owner = ownerOf(event.data.parentID);
         if (owner !== undefined) {
           childOwners.set(event.data.sessionID, owner);
-          announced.set(event.data.sessionID, event.data);
+          const previous = announced.get(event.data.sessionID);
+          announced.set(event.data.sessionID, {
+            ...event.data,
+            ...(previous?.parentID === event.data.parentID && previous?.closedAt !== undefined
+              ? { closedAt: previous.closedAt }
+              : {}),
+          });
           holderOf(event.data.parentID)?.wakes.at(-1)?.children.add(event.data.sessionID);
         }
         return;
@@ -2531,6 +2632,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
       for (const message of recent.toReversed()) {
         if (message.type !== "assistant" || state.active !== turn) continue;
+        if (message.finish === "stop" || message.finish === "tool-calls")
+          turn.responseKinds.set(message.id, message.finish === "stop" ? "final" : "commentary");
         const ordinals = { text: 0, reasoning: 0 };
         for (const [index, part] of message.content.entries()) {
           if (part.type === "text" || part.type === "reasoning") {
@@ -2550,6 +2653,32 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             continue;
           }
           if (part.type !== "tool") continue;
+          if (part.name === "subagent" || state.calls.has(part.id)) {
+            if (!state.calls.has(part.id)) yield* startCall(state, turn, part.id);
+            const call = state.calls.get(part.id)!;
+            const recoveredInput =
+              typeof part.state.input === "object" && part.state.input !== null
+                ? part.state.input
+                : undefined;
+            call.prompt = stringField(recoveredInput, "prompt") ?? call.prompt;
+            call.title = stringField(recoveredInput, "description") ?? call.title;
+            call.background =
+              call.background ||
+              (typeof part.state.input === "object" &&
+                part.state.input !== null &&
+                "background" in part.state.input &&
+                part.state.input.background === true);
+            if (part.state.status === "completed")
+              yield* applyToolSuccess(state, turn, {
+                id: part.id,
+                content: part.state.content,
+                metadata: part.state.metadata,
+              });
+            else if (part.state.status === "error")
+              yield* settleCall(call, "failed", part.state.error.message);
+            else yield* emitSubagent(call);
+            continue;
+          }
           if (!turn.tools.has(part.id)) {
             turn.tools.set(part.id, { name: part.name, input: {} });
             turn.startedAt.set(part.id, yield* DateTime.now);
@@ -2561,10 +2690,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           if (part.state.status === "completed") {
             yield* emitTool(state, turn, part.id, "completed", {
               output: textOf(part.state.content),
-              files: part.state.content.flatMap((content) =>
-                content.type === "file" ? [content] : [],
-              ),
               metadata: part.state.metadata,
+              files: part.state.content.filter((part) => part.type === "file"),
             });
             turn.tools.delete(part.id);
           } else if (part.state.status === "error") {
@@ -3020,6 +3147,13 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             runId: null,
             nodeId: null,
             role: message.type,
+            ...(message.type === "assistant" &&
+            (message.finish === "stop" || message.finish === "tool-calls")
+              ? {
+                  responseKind:
+                    message.finish === "stop" ? ("final" as const) : ("commentary" as const),
+                }
+              : {}),
             text,
             attachments: [],
             streaming: false,
@@ -3886,6 +4020,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
         for (const [child, owner] of childOwners) {
           if (owner !== state) continue;
           childOwners.delete(child);
+          announced.delete(child);
           threads.delete(child);
         }
         if (state.mcp !== undefined) yield* removeMcp(state.mcp);

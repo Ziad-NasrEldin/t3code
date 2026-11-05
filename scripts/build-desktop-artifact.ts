@@ -62,7 +62,8 @@ import { Command, Flag } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+const SIGNAL_CREW = process.env.T3CODE_DESKTOP_EDITION === "signal-crew";
+const DESKTOP_APP_ID = SIGNAL_CREW ? "com.t3tools.t3code.signalcrew" : "com.t3tools.t3code";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -2683,12 +2684,15 @@ export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig"
   updateChannel: "latest" | "nightly",
 ) {
   const env = yield* Config.all({
+    edition: Config.String("T3CODE_DESKTOP_EDITION").pipe(Config.option),
     updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
     githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
   });
   const rawRepo = (
     Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
+    (Option.getOrUndefined(env.edition) === "signal-crew"
+      ? "Ziad-NasrEldin/t3code"
+      : Option.getOrUndefined(env.githubRepository)?.trim()) ||
     ""
   ).trim();
   if (!rawRepo) return undefined;
@@ -2713,12 +2717,16 @@ export function isDesktopPreviewVersion(version: string): boolean {
   return /-pr\./.test(version) || /-preview\.\d{8}\.\d+$/.test(version);
 }
 
+function resolveDesktopBrandChannel(version: string): "latest" | "nightly" {
+  return /-preview\.\d{8}\.\d+$/.test(version) ? "nightly" : resolveDesktopUpdateChannel(version);
+}
+
 export function resolveDesktopWebAssetBrand(version: string): WebAssetBrand {
-  return resolveWebAssetBrandForChannel(resolveDesktopUpdateChannel(version));
+  return resolveWebAssetBrandForChannel(resolveDesktopBrandChannel(version));
 }
 
 export function resolveDesktopBuildIconAssets(version: string): DesktopBuildIconAssets {
-  if (resolveDesktopUpdateChannel(version) === "nightly") {
+  if (resolveDesktopBrandChannel(version) === "nightly") {
     return {
       macIconPng: BRAND_ASSET_PATHS.nightlyMacIconPng,
       linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
@@ -2749,7 +2757,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 }
 
 export function resolveDesktopProductName(version: string): string {
-  return resolveDesktopUpdateChannel(version) === "nightly"
+  if (SIGNAL_CREW) return "T3 Code (Signal Crew)";
+  return resolveDesktopBrandChannel(version) === "nightly"
     ? "T3 Code (Nightly)"
     : (desktopPackageJson.productName ?? "T3 Code");
 }
@@ -2764,7 +2773,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   macPasskeySigning:
     | {
         readonly entitlementsPath: string;
-        readonly provisioningProfilePath: string;
+        readonly provisioningProfilePath?: string;
       }
     | undefined,
   wslRuntimeBundled = false,
@@ -2774,7 +2783,9 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     afterPack: (yield* Path.Path).join(yield* RepoRoot, "scripts/prepare-server-compile-cache.cjs"),
     appId: DESKTOP_APP_ID,
     productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: SIGNAL_CREW
+      ? "Signal-Crew-${version}-${arch}.${ext}"
+      : "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2856,7 +2867,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           role: "Viewer",
         },
       ],
-      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
+      ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : { identity: "-" }),
       ...(macPasskeySigning
         ? {
             entitlements: macPasskeySigning.entitlementsPath,
@@ -2870,7 +2881,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.dmg = {
       // Finder caches DMG backgrounds by volume name; give each installer its own.
       title: `${resolveDesktopProductName(version)} ${version} Installer`,
-      background: `dmg/dmg-background-${updateChannel}.png`,
+      background: `dmg/dmg-background-${resolveDesktopBrandChannel(version)}.png`,
       window: {
         width: 640,
         // DMG bounds include Finder's 32px title bar; keep that artwork strip clear.
@@ -3749,7 +3760,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   if (options.platform === "mac" && options.target === "dmg") {
     yield* stageDesktopDmgBackground(
       stageResourcesDir,
-      resolveDesktopUpdateChannel(appVersion),
+      resolveDesktopBrandChannel(appVersion),
       options.verbose,
     );
   }
@@ -3797,7 +3808,9 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
+    options.platform === "mac" &&
+    options.signed &&
+    (!SIGNAL_CREW || loadRepoEnv({ repoRoot }).T3CODE_MACOS_PROVISIONING_PROFILE)
       ? yield* Effect.try({
           try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
@@ -3812,9 +3825,10 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
         ),
       }
     : undefined;
-  const macEntitlementsPath = macPasskeySigning
-    ? path.join(stageAppDir, "entitlements.mac.plist")
-    : undefined;
+  const macEntitlementsPath =
+    macPasskeySigning || (SIGNAL_CREW && options.signed)
+      ? path.join(stageAppDir, "entitlements.mac.plist")
+      : undefined;
   let macWebAuthn: MacWebAuthnEntitlements | undefined;
   if (macPasskeySigning && macEntitlementsPath) {
     if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
@@ -3835,6 +3849,20 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     );
   }
 
+  if (SIGNAL_CREW && options.signed && !macPasskeySigning && macEntitlementsPath) {
+    yield* fs.writeFileString(
+      macEntitlementsPath,
+      `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>com.apple.security.cs.allow-jit</key><true/>
+<key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+<key>com.apple.security.cs.disable-library-validation</key><true/>
+<key>com.apple.security.device.camera</key><true/>
+<key>com.apple.security.device.audio-input</key><true/>
+</dict></plist>`,
+    );
+  }
   const stageDependencies =
     options.platform === "win"
       ? { ...resolvedDesktopRuntimeDependencies }
@@ -3867,7 +3895,7 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     license: "MIT",
     homepage: "https://t3.codes",
     author: "T3 Tools",
-    main: "apps/desktop/dist-electron/boot.cjs",
+    main: SIGNAL_CREW ? "signal-crew-bootstrap.cjs" : "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
@@ -3875,10 +3903,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      macPasskeySigning && macEntitlementsPath
+      macEntitlementsPath
         ? {
             entitlementsPath: macEntitlementsPath,
-            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+            ...(macPasskeySigning
+              ? { provisioningProfilePath: macPasskeySigning.provisioningProfilePath }
+              : {}),
           }
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
@@ -3890,6 +3920,12 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     },
   };
 
+  if (SIGNAL_CREW) {
+    yield* fs.copyFile(
+      path.join(repoRoot, "scripts/signal-crew-bootstrap.cjs"),
+      path.join(stageAppDir, "signal-crew-bootstrap.cjs"),
+    );
+  }
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
   const stageWorkspaceConfig = createStageWorkspaceConfig({

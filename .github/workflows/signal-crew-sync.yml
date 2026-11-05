@@ -1,0 +1,90 @@
+name: Signal Crew nightly upstream check
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pull-requests: write
+concurrency:
+  group: signal-crew-sync
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: github.repository == 'Ziad-NasrEldin/t3code'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/signal-crew-office
+          fetch-depth: 0
+          token: ${{ secrets.SIGNAL_CREW_SYNC_TOKEN || github.token }}
+      - name: Resolve latest official nightly
+        id: nightly
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { resolveLatestNightlyCommit } = require('./.github/scripts/check-nightly-release.cjs');
+            const { tag, sha } = await resolveLatestNightlyCommit({
+              github,
+              context: { repo: { owner: 'pingdotgg', repo: 't3code' } },
+              core,
+            });
+            core.setOutput('tag', tag);
+            core.setOutput('sha', sha);
+      - name: Open an approval-gated upstream merge
+        env:
+          GH_TOKEN: ${{ secrets.SIGNAL_CREW_SYNC_TOKEN || github.token }}
+          SIGNAL_CREW_SYNC_TOKEN: ${{ secrets.SIGNAL_CREW_SYNC_TOKEN }}
+          UPSTREAM_TAG: ${{ steps.nightly.outputs.tag }}
+          UPSTREAM_SHA: ${{ steps.nightly.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="$UPSTREAM_TAG"
+          base_branch="feat/signal-crew-office"
+          git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$tag"
+          upstream=$(git rev-parse 'FETCH_HEAD^{commit}')
+          test "$upstream" = "$UPSTREAM_SHA"
+          if git merge-base --is-ancestor "$upstream" HEAD; then exit 0; fi
+          branch="signal-crew/upstream-$upstream"
+          if git ls-remote --exit-code --heads origin "$branch"; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if [[ -z "$SIGNAL_CREW_SYNC_TOKEN" ]]; then
+            echo 'Set the SIGNAL_CREW_SYNC_TOKEN repository secret with Contents, Pull requests, and Workflows write access before importing an upstream nightly.' >&2
+            exit 1
+          fi
+          # Keep the branch at the official nightly. The merge agent performs
+          # the actual merge of the maintained branch and resolves conflicts
+          # on this branch, so GitHub can show one reviewable PR throughout.
+          git checkout -b "$branch" "$upstream"
+          git push origin "HEAD:refs/heads/$branch"
+          cat > "$RUNNER_TEMP/pr-body.md" <<EOF
+          ## Approval required before merge
+
+          This branch imports the official T3 Code nightly **$tag** at **$upstream**.
+
+          Signal Crew must not install the upstream artifact directly: doing that would replace the custom Office build. Before merging this PR, ask the user to confirm that an agent should:
+
+          1. merge the Signal Crew maintained branch ($base_branch) into this branch;
+          2. resolve conflicts while preserving the Signal Crew customizations;
+          3. run the focused updater, packaging, and Office checks;
+          4. attach the test results and ask for final merge approval.
+
+          Only the resulting signed Signal Crew build may be published to the desktop update feed.
+          EOF
+          pr_url=$(gh pr create \
+            --draft \
+            --base "$base_branch" \
+            --head "$branch" \
+            --title "chore(signal-crew): import official nightly $tag" \
+            --body-file "$RUNNER_TEMP/pr-body.md")
+          {
+            echo "### Official nightly ready for approval"
+            echo
+            echo "Source: [pingdotgg/t3code $tag](https://github.com/pingdotgg/t3code/releases/tag/$tag)"
+            echo "Merge PR: $pr_url"
+            echo
+            echo "An agent must merge and resolve conflicts only after the user confirms."
+          } >> "$GITHUB_STEP_SUMMARY"
