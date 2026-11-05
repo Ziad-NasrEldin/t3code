@@ -97,11 +97,12 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$CHANNEL" == nightly ]]; then
-            test -f release/nightly-mac.yml
+            manifest=release/nightly-mac.yml
           else
-            test -f release/latest-mac.yml
+            manifest=release/latest-mac.yml
           fi
-          release_args=("v$VERSION" release/*.dmg release/*.zip release/*.yml --draft --target "$GITHUB_SHA")
+          test -f "$manifest"
+          release_args=("v$VERSION" release/*.dmg release/*.zip release/*.blockmap "$manifest" --draft --target "$GITHUB_SHA")
           if [[ "$CHANNEL" == nightly ]]; then
             release_args+=(--prerelease)
             title="Signal Crew nightly $VERSION"

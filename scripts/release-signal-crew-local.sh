@@ -24,4 +24,4 @@ env -u T3CODE_DESKTOP_EDITION vp test run scripts/build-desktop-artifact.test.ts
 node scripts/build-desktop-artifact.ts --platform mac --target dmg --arch arm64 --build-version "$version" --signed --output-dir "release/signal-crew-$version"
 output="release/signal-crew-$version"
 test -f "$output/$channel-mac.yml"
-gh release create "v$version" "$output"/*.dmg "$output"/*.zip "$output"/*.yml "${release_args[@]}" --repo "$T3CODE_DESKTOP_UPDATE_REPOSITORY" --target "$(git rev-parse HEAD)" --draft --title "Signal Crew $version" --notes "Built and notarized on the maintainer Mac. Official nightly source: ${upstream_tag:-not applicable}. Review the installer and upgrade before publishing."
+gh release create "v$version" "$output"/*.dmg "$output"/*.zip "$output"/*.blockmap "$output/$channel-mac.yml" "${release_args[@]}" --repo "$T3CODE_DESKTOP_UPDATE_REPOSITORY" --target "$(git rev-parse HEAD)" --draft --title "Signal Crew $version" --notes "Built and notarized on the maintainer Mac. Official nightly source: ${upstream_tag:-not applicable}. Review the installer and upgrade before publishing."
