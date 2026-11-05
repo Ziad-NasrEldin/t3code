@@ -958,6 +958,7 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly t3codeCommitHash: string;
+  readonly t3codeUpstreamNightlyTag?: string;
   readonly t3codeWebAuthn?: MacWebAuthnEntitlements;
   readonly private: true;
   readonly packageManager: string;
@@ -3886,6 +3887,9 @@ const buildDesktopArtifactUnlocked = Effect.fn("buildDesktopArtifactUnlocked")(f
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
+    ...(SIGNAL_CREW && process.env.T3CODE_UPSTREAM_NIGHTLY_TAG
+      ? { t3codeUpstreamNightlyTag: process.env.T3CODE_UPSTREAM_NIGHTLY_TAG }
+      : {}),
     // Read by apps/desktop/src/preview/Passkeys.ts; must match the signed entitlements.
     ...(macWebAuthn ? { t3codeWebAuthn: macWebAuthn } : {}),
     private: true,

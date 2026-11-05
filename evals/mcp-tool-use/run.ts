@@ -68,6 +68,7 @@ import {
   makeClaudeQueryOptions,
 } from "../../apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { proxyConfig } from "../shared/proxy.ts";
+import { signalCrewUpdateCases } from "./signal-crew-update-cases.ts";
 import { changeRequestsCreatedBy } from "../../apps/server/src/orchestration-v2/PullRequestSyncReactor.ts";
 import { DeviceExpect, gradeDevice } from "./device-grading.ts";
 import {
@@ -2295,7 +2296,10 @@ const main = Effect.gen(function* () {
       .filter((name) => name.endsWith(".ndjson"))
       .toSorted()
       .map((name) => path.join(casesDir, name));
-  const cases = (yield* Effect.forEach(caseFiles, (file) => readNdjson(file, decodeCase))).flat();
+  const cases = [
+    ...(yield* Effect.forEach(caseFiles, (file) => readNdjson(file, decodeCase))).flat(),
+    ...(flags.cases === undefined ? signalCrewUpdateCases : []),
+  ];
   const wanted = flags.case?.flatMap((ids) => ids.split(","));
   const codex = isCodex(flags.model);
   const harness = codex ? "codex" : "claude";

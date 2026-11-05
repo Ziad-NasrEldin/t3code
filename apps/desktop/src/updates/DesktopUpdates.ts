@@ -35,6 +35,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopUpdatePolicy from "./DesktopUpdatePolicy.ts";
+import * as OfficialNightly from "./OfficialNightly.ts";
 import { normalizeDesktopUpdateReleaseNotes } from "./releaseNotes.ts";
 import { desktopUpdateChannelOf } from "@t3tools/shared/cliRelease";
 import { compareSemverVersions } from "@t3tools/shared/semver";
@@ -371,6 +372,8 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const policy = yield* DesktopUpdatePolicy.DesktopUpdatePolicy;
+  const officialNightly = yield* OfficialNightly.OfficialNightly;
+  const officialNightlyRef = yield* Ref.make<DesktopUpdateState["officialNightly"]>(undefined);
   // Any user can set the mock flag, so it never replaces an administrator's update source.
   const mockUpdates = config.mockUpdates && policy.message === null;
 
@@ -416,7 +419,12 @@ export const make = Effect.gen(function* () {
   const setState = (state: DesktopUpdateState): Effect.Effect<void> =>
     stateMutex
       .withPermits(1)(
-        Ref.set(updateStateRef, state).pipe(Effect.andThen(PubSub.publish(stateChanges, state))),
+        Effect.gen(function* () {
+          const source = yield* Ref.get(officialNightlyRef);
+          const next = source ? { ...state, officialNightly: source } : state;
+          yield* Ref.set(updateStateRef, next);
+          yield* PubSub.publish(stateChanges, next);
+        }),
       )
       .pipe(Effect.andThen(emitState));
 
@@ -535,6 +543,12 @@ export const make = Effect.gen(function* () {
     yield* Effect.annotateCurrentSpan({ reason });
     if (yield* Ref.get(desktopState.quitting)) return false;
     if (!(yield* Ref.get(updaterConfiguredRef))) return false;
+
+    if (policy.mode !== "off" && policy.allowNightly) {
+      const source = yield* officialNightly.check(reason === "manual");
+      yield* Ref.set(officialNightlyRef, source);
+      yield* setState(yield* Ref.get(updateStateRef));
+    }
 
     const state = yield* Ref.get(updateStateRef);
     // A configured updater is disabled only by a channel the managed policy blocks.

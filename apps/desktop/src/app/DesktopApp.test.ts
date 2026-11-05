@@ -45,6 +45,7 @@ import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
+import * as NightlyMerge from "../updates/NightlyMerge.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
@@ -139,6 +140,12 @@ it.effect(
           Effect.provideService(DesktopUpdates.DesktopUpdates, {
             configure: Effect.void,
           } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
+          Effect.provideService(NightlyMerge.NightlyMerge, {
+            get: () => Effect.succeed(null),
+            begin: () => Effect.die("Unexpected nightly merge"),
+            review: () => Effect.die("Unexpected nightly review"),
+            approve: () => Effect.die("Unexpected nightly approval"),
+          }),
           Effect.provideService(DesktopLinuxUrlHandler.DesktopLinuxUrlHandler, {
             register: Deferred.succeed(registrationStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseRegistration)),

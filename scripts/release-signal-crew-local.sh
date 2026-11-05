@@ -10,6 +10,7 @@ if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$ ]]; then
   git fetch https://github.com/pingdotgg/t3code.git "refs/tags/$upstream_tag"
   git merge-base --is-ancestor 'FETCH_HEAD^{commit}' HEAD || { echo 'Merge the official nightly before releasing' >&2; exit 1; }
   channel=nightly
+  export T3CODE_UPSTREAM_NIGHTLY_TAG="$upstream_tag"
   release_args+=(--prerelease)
 else
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Expected stable or nightly semver' >&2; exit 1; }

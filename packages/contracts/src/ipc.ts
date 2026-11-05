@@ -1,8 +1,15 @@
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
 import type { PreviewCaptureFailureEncoded } from "./previewCapture.ts";
 
 import { SnapShotSource } from "./chatAttachment.ts";
-import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
   BrowserImportResult,
@@ -282,6 +289,7 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   notAppliedVersion?: string;
+  officialNightly?: OfficialNightlyState;
   /** Off only because a managed policy rules out this channel; switching channels turns it on. */
   channelBlockedByPolicy?: true;
 }
@@ -309,6 +317,42 @@ export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
   footer: Schema.optionalKey(Schema.String),
 });
 
+export const OfficialNightlyStateSchema = Schema.Struct({
+  status: Schema.Literals(["available", "current", "error"]),
+  tag: Schema.NullOr(Schema.String),
+  commit: Schema.NullOr(Schema.String),
+  releaseUrl: Schema.NullOr(Schema.String),
+  publishedAt: Schema.NullOr(Schema.String),
+  integratedTag: Schema.NullOr(Schema.String),
+  checkedAt: Schema.String,
+  message: Schema.NullOr(Schema.String),
+});
+export type OfficialNightlyState = typeof OfficialNightlyStateSchema.Type;
+
+export const OfficialNightlyMergeSchema = Schema.Struct({
+  tag: Schema.String,
+  upstreamCommit: Schema.String,
+  sourceDirectory: Schema.String,
+  environmentId: EnvironmentId,
+  projectId: ProjectId,
+  threadId: ThreadId,
+  messageId: MessageId,
+  approvalMessageId: MessageId,
+  approvedCommit: Schema.NullOr(Schema.String),
+  approvedVersion: Schema.NullOr(Schema.String),
+});
+export type OfficialNightlyMerge = typeof OfficialNightlyMergeSchema.Type;
+export const OfficialNightlyMergeBeginSchema = OfficialNightlyMergeSchema.mapFields(
+  Struct.omit(["approvedCommit", "approvedVersion"]),
+);
+export const OfficialNightlyMergeReviewSchema = Schema.Struct({
+  preparedCommit: Schema.String,
+  baseCommit: Schema.String,
+  summary: Schema.String,
+  version: Schema.String,
+});
+export type OfficialNightlyMergeReview = typeof OfficialNightlyMergeReviewSchema.Type;
+
 export const DesktopUpdateStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   status: DesktopUpdateStatusSchema,
@@ -327,6 +371,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   errorContext: Schema.NullOr(Schema.Literals(["check", "download", "install"])),
   canRetry: Schema.Boolean,
   notAppliedVersion: Schema.optionalKey(Schema.String),
+  officialNightly: Schema.optionalKey(OfficialNightlyStateSchema),
 });
 
 export const DesktopCliCommandStateSchema = Schema.Struct({
@@ -1130,6 +1175,17 @@ export interface DesktopBridge {
     minimumVersion?: string,
   ) => Promise<DesktopUpdateState>;
   checkForUpdate: () => Promise<DesktopUpdateCheckResult>;
+  officialNightlyMerge: {
+    get: (tag: string) => Promise<OfficialNightlyMerge | null>;
+    begin: (input: typeof OfficialNightlyMergeBeginSchema.Type) => Promise<OfficialNightlyMerge>;
+    review: (tag: string, worktreePath: string) => Promise<OfficialNightlyMergeReview>;
+    approve: (
+      tag: string,
+      worktreePath: string,
+      preparedCommit: string,
+      version: string,
+    ) => Promise<OfficialNightlyMerge>;
+  };
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   /** With a version, installs only that downloaded build. */
   installUpdate: (expectedVersion?: string) => Promise<DesktopUpdateActionResult>;

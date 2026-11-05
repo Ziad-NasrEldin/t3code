@@ -34,6 +34,7 @@ jobs:
       CHANNEL: ${{ inputs.channel }}
       VERSION: ${{ inputs.version }}
       UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+      T3CODE_UPSTREAM_NIGHTLY_TAG: ${{ inputs.upstream_tag }}
     steps:
       - uses: actions/checkout@v4
         with:

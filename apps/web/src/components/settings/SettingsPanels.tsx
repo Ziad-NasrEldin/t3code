@@ -1,3 +1,4 @@
+import { OfficialNightlyUpdate } from "../OfficialNightlyUpdate";
 import { useAtomValue } from "@effect/atom-react";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -321,6 +322,7 @@ function AboutVersionSection() {
           </Tooltip>
         }
       />
+      <OfficialNightlyUpdate settings />
       {hasDesktopBridge ? (
         <SettingsRow
           {...searchableSetting("update-track")}

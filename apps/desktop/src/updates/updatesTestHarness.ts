@@ -16,6 +16,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopUpdatePolicy from "./DesktopUpdatePolicy.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
+import * as OfficialNightly from "./OfficialNightly.ts";
 
 export const flushCallbacks = Effect.yieldNow;
 
@@ -273,6 +274,11 @@ export function makeHarness(options: UpdatesHarnessOptions = {}) {
   });
 
   const layer = DesktopUpdates.layer.pipe(
+    Layer.provide(
+      Layer.succeed(OfficialNightly.OfficialNightly, {
+        check: Effect.fn("OfficialNightly.check")(() => Effect.undefined),
+      }),
+    ),
     Layer.provide(layerFileSystem),
     Layer.provide(DesktopUpdatePolicy.layerTest(options.policy)),
     Layer.provideMerge(layerUpdater),

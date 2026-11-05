@@ -1,3 +1,4 @@
+import { OfficialNightlyUpdate } from "../OfficialNightlyUpdate";
 import {
   Building2Icon,
   ArrowLeftIcon,
@@ -300,6 +301,7 @@ const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
         </>
       )}
       <SidebarThreadUndoNotice />
+      <OfficialNightlyUpdate />
       <SidebarUpdatePill />
     </SidebarMenu>
   );

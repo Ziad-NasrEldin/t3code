@@ -182,6 +182,22 @@ Provider updates do not restart running chats. An existing session can keep
 using the previous CLI until it ends. If discovery fails, check the provider
 status and refresh it again.
 
+## Official nightlies in Signal Crew
+
+Signal Crew checks the official T3 Code nightly releases while keeping your
+custom app build. Open **Official T3 Code nightlies** in **Settings → About**,
+choose your local Signal Crew source project, and start the merge agent. Agent
+work uses that project’s configured provider and subscription.
+
+The agent prepares and tests the merge in a separate worktree. Inspect its
+prepared merge and review the changes before approving the merge and build.
+Approval applies to the displayed commit; changed or incomplete work needs
+another review. Follow the saved agent thread if it needs help or a retry.
+
+After the signed build is published, use **Check for installer**, download the
+update, and choose **Restart and install** when your running work has finished.
+You can leave the update pending and return later.
+
 ## Mobile updates
 
 To update an environment from your phone, open **Settings → Environments** and

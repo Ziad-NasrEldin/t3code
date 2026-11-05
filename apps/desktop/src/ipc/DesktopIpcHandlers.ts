@@ -27,6 +27,10 @@ import {
 } from "./methods/sshEnvironment.ts";
 import {
   checkForUpdate,
+  getNightlyMerge,
+  beginNightlyMerge,
+  reviewNightlyMerge,
+  approveNightlyMerge,
   downloadUpdate,
   getUpdateState,
   installUpdate,
@@ -155,6 +159,10 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(downloadUpdate);
   yield* ipc.handle(installUpdate);
   yield* ipc.handle(checkForUpdate);
+  yield* ipc.handle(getNightlyMerge);
+  yield* ipc.handle(beginNightlyMerge);
+  yield* ipc.handle(reviewNightlyMerge);
+  yield* ipc.handle(approveNightlyMerge);
   yield* ipc.handle(getCliCommandState);
   yield* ipc.handle(installCliCommand);
   yield* ipc.handle(uninstallCliCommand);

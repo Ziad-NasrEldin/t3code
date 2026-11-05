@@ -270,6 +270,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setUpdateChannel: (channel, minimumVersion) =>
     ipcRenderer.invoke(IpcChannels.UPDATE_SET_CHANNEL_CHANNEL, { channel, minimumVersion }),
   checkForUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_CHECK_CHANNEL),
+  officialNightlyMerge: {
+    get: (tag) => ipcRenderer.invoke(IpcChannels.NIGHTLY_MERGE_GET_CHANNEL, tag),
+    begin: (input) => ipcRenderer.invoke(IpcChannels.NIGHTLY_MERGE_BEGIN_CHANNEL, input),
+    review: (tag, worktreePath) =>
+      ipcRenderer.invoke(IpcChannels.NIGHTLY_MERGE_REVIEW_CHANNEL, { tag, worktreePath }),
+    approve: (tag, worktreePath, preparedCommit, version) =>
+      ipcRenderer.invoke(IpcChannels.NIGHTLY_MERGE_APPROVE_CHANNEL, {
+        tag,
+        worktreePath,
+        preparedCommit,
+        version,
+      }),
+  },
   downloadUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_DOWNLOAD_CHANNEL),
   installUpdate: (expectedVersion) =>
     ipcRenderer.invoke(IpcChannels.UPDATE_INSTALL_CHANNEL, expectedVersion),
