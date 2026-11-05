@@ -36,6 +36,8 @@ jobs:
       UPSTREAM_TAG: ${{ inputs.upstream_tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Validate release and signing configuration
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
