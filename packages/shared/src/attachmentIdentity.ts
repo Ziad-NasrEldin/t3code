@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
 
-const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
+export const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const PENDING_ATTACHMENT_THREAD_SEGMENT = "pending";
 
 export function toSafeThreadAttachmentSegment(threadId: string): string | null {
