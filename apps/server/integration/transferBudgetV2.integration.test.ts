@@ -337,7 +337,11 @@ it.live("reports V2 thread HTTP and WebSocket transfer budgets", () =>
           // Shell items carry the shell read when their batch is projected, and unchanged
           // shells are skipped, so a turn split across batches may never yield an item at
           // the last sequence. Wait for the final shell instead.
-          const finalShell = yield* projection.getThreadShell(THREAD_ID);
+          const projectedShell = yield* projection.getThreadShell(THREAD_ID);
+          const finalShell = projectedShell && {
+            ...projectedShell,
+            settlementSource: projectedShell.settlementSource ?? null,
+          };
           const shellTerminal = (item: StreamItem) =>
             item.kind === "thread.updated" && NodeUtil.isDeepStrictEqual(item.thread, finalShell);
           const liveTurn = yield* collectUntil(tq, threadTerminal);
